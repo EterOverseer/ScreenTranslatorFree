@@ -1,0 +1,6 @@
+{
+  "name": "EterScreen",
+  "description": "Floating native Android screen translator for Japanese Manga, Korean Manhwa, and general screen text to Thai using on-device OCR, offline translation, and Gemini AI.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

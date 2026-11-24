@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">EterScreen</string>
+    <string name="app_full_title">EterScreen Translator</string>
+    <string name="accessibility_service_description">ตรวจจับการหยุดเลื่อนหน้าจอ (Scroll Stop) เพื่อแปลภาษาอัตโนมัติในมังงะและมันฮวา โดยไม่อ่านหรือเก็บข้อมูลหน้าต่างแอปอื่น</string>
+    <string name="notif_channel_capture_name">บริการจับภาพหน้าจอสำหรับแปลภาษา</string>
+    <string name="notif_channel_capture_desc">แจ้งเตือนสถานะการทำงานของ MediaProjection สำหรับแปลภาษาบนหน้าจอ</string>
+    <string name="notif_capture_title">EterScreen กำลังพร้อมแปลหน้าจอ</string>
+    <string name="notif_capture_text">แตะเพื่อหยุดหรือจัดการการจับภาพหน้าจอ</string>
+    <string name="notif_action_stop">หยุดทันที</string>
+    <string name="notif_action_pause">พักชั่วคราว</string>
+    <string name="notif_action_resume">ทำต่อ</string>
+    <string name="hero_banner_desc">แบนเนอร์ระบบแปลหน้าจอ EterScreen Translator</string>
+</resources>
