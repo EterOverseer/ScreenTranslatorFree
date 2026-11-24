@@ -14,7 +14,7 @@ on:
       publish_release:
         description: "Publish Manual & Full Debug APKs to GitHub Releases"
         required: true
-        default: false
+        default: true
         type: boolean
 
 permissions:
@@ -152,12 +152,23 @@ jobs:
           retention-days: 30
 
       - name: Publish Manual & Full Debug APKs to GitHub Releases
-        if: ${{ github.event_name != 'pull_request' && (startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish_release)) }}
+        if: ${{ github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish_release)) }}
         uses: softprops/action-gh-release@v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'latest-editions-debug' }}
-          name: ${{ startsWith(github.ref, 'refs/tags/') && format('EterScreen Translator {0}', github.ref_name) || 'EterScreen Translator (Manual Primary + Full Prebuilt APKs)' }}
-          prerelease: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+          target_commitish: ${{ github.sha }}
+          name: ${{ startsWith(github.ref, 'refs/tags/') && format('EterScreen Translator {0}', github.ref_name) || format('EterScreen Translator (Manual + Full Debug Build #{0})', github.run_number) }}
+          body: |
+            Automated build from `${{ github.ref_name }}` (`${{ github.sha }}`, workflow run `#${{ github.run_number }}`).
+
+            - **Manual Edition (`EterScreen-Translator-manual-debug.apk`)**: `com.eteroverseer.screentranslator` — no Accessibility Service declaration in manifest.
+            - **Full Edition (`EterScreen-Translator-full-debug.apk`)**: `com.eteroverseer.screentranslator.full` — includes `AutoScrollAccessibilityService`.
+          draft: false
+          prerelease: false
+          make_latest: true
+          overwrite_files: true
           generate_release_notes: ${{ startsWith(github.ref, 'refs/tags/v') }}
           files: |
             dist/manual/EterScreen-Translator-manual-debug.apk

@@ -132,4 +132,5 @@ Workflow อยู่ที่ `.github/workflows/build-apk.yml` โดยทำ
 - สร้างทั้ง **Manual Debug APK** และ **Full Debug APK**
 - รัน `scripts/verify_flavor_manifests.py` ตรวจยืนยันทั้ง Merged Manifest และ Packaged APK (CI จะล้มเหลวทันทีหากรุ่น Manual มี Accessibility Service หรือรุ่น Full ขาด Service)
 - อัปโหลด **Manual APK** (`EterScreen-Translator-manual-debug`) เป็น Artifact หลัก และอัปโหลด **Full APK** (`EterScreen-Translator-full-debug`) แยกต่างหากชัดเจน
+- เผยแพร่ APK ทั้ง 2 รุ่น (พร้อม `.sha256`) ไปยัง **GitHub Releases** อัตโนมัติเมื่อ push เข้า `main` (แท็ก `latest-editions-debug` พร้อมตั้งเป็น Latest), เมื่อ push tag `v*`, หรือเมื่อสั่งรันผ่าน `workflow_dispatch` (ค่าเริ่มต้น `publish_release = true`)
 - **Repository Secrets (ตัวเลือกเสริม):** `GOOGLE_SERVICES_JSON_B64` สำหรับใส่ `app/google-services.json` ใน CI (หากไม่กำหนด แอปยังบิลด์ผ่านและใช้โหมดออฟไลน์ได้ตามปกติ)
