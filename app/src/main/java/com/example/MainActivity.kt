@@ -20,6 +20,7 @@ import androidx.compose.runtime.setValue
 import com.example.app.AppContainer
 import com.example.app.AppNavigation
 import com.example.app.EterScreenApplication
+import com.example.core.edition.EditionConfig
 import com.example.core.permissions.PermissionHelper
 import com.example.core.security.configureAppCheck
 import com.example.domain.model.CaptureStatus
@@ -106,7 +107,9 @@ class MainActivity : ComponentActivity() {
                         startActivity(PermissionHelper.createOverlaySettingsIntent(this))
                     },
                     onRequestAccessibilityPermission = {
-                        startActivity(PermissionHelper.createAccessibilitySettingsIntent())
+                        if (EditionConfig.isAutoScrollSupported) {
+                            PermissionHelper.createAccessibilitySettingsIntent()?.let(::startActivity)
+                        }
                     },
                     onRequestNotificationPermission = {
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {

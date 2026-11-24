@@ -5,12 +5,13 @@ import android.content.Intent
 import androidx.core.content.ContextCompat
 import com.example.capture.AutoCaptureScheduler
 import com.example.capture.ScreenCaptureManager
+import com.example.core.edition.EditionConfig
 import com.example.core.permissions.PermissionHelper
 import com.example.core.permissions.PermissionStatus
 import com.example.core.security.FirebaseConfigStatus
 import com.example.core.security.KeystoreCryptoManager
 import com.example.core.security.inspectFirebaseStatus
-import com.example.core.service.AutoScrollAccessibilityService
+import com.example.core.service.AutoScrollBridge
 import com.example.core.service.ScreenCaptureForegroundService
 import com.example.data.local.AppDatabase
 import com.example.data.preferences.SettingsDataStore
@@ -109,6 +110,9 @@ class AppContainer(private val appContext: Context) {
     private val _firebaseStatus = MutableStateFlow(inspectFirebaseStatus(appContext))
     val firebaseStatus: StateFlow<FirebaseConfigStatus> = _firebaseStatus.asStateFlow()
 
+    val isAutoScrollSupported: Boolean
+        get() = EditionConfig.isAutoScrollSupported
+
     init {
         appScope.launch {
             settingsDataStore.migrateLegacySecrets()
@@ -117,8 +121,9 @@ class AppContainer(private val appContext: Context) {
             }
         }
         appScope.launch {
-            AutoScrollAccessibilityService.isConnected.collect { connected ->
-                translateScreenUseCase.updateAccessibilityStatus(connected)
+            AutoScrollBridge.isConnected.collect { connected ->
+                val effectiveConnected = EditionConfig.isAutoScrollSupported && connected
+                translateScreenUseCase.updateAccessibilityStatus(effectiveConnected)
                 refreshPermissions()
             }
         }

@@ -247,36 +247,52 @@ fun SettingsScreen(
                 }
             }
 
-            // 4. Auto Capture Timing
+            // 4. Auto Capture Timing (Full Edition) or Manual Edition Notice
             EterCard {
-                SectionHeader(title = "การจับภาพและหน่วงเวลาหลังหยุดเลื่อน", icon = Icons.Rounded.Timer)
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    CaptureMode.entries.forEach { mode ->
-                        FilterChip(
-                            selected = settings.captureMode == mode,
-                            onClick = { onSetCaptureMode(mode) },
-                            label = { Text(mode.displayThai) }
-                        )
+                SectionHeader(
+                    title = if (uiState.isAutoScrollSupported) {
+                        "การจับภาพและหน่วงเวลาหลังหยุดเลื่อน"
+                    } else {
+                        "การจับภาพหน้าจอ (Manual Edition)"
+                    },
+                    icon = Icons.Rounded.Timer
+                )
+                if (uiState.isAutoScrollSupported) {
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        CaptureMode.entries.forEach { mode ->
+                            FilterChip(
+                                selected = settings.captureMode == mode,
+                                onClick = { onSetCaptureMode(mode) },
+                                label = { Text(mode.displayThai) }
+                            )
+                        }
                     }
+
+                    val delaySec = (settings.autoCaptureDelayMs / 100f).roundToInt() / 10f
+                    Text("รอหลังหยุดเลื่อน: $delaySec วินาที (1.0 - 5.0 วินาที)", style = MaterialTheme.typography.bodyMedium)
+                    Slider(
+                        value = settings.autoCaptureDelayMs.toFloat(),
+                        onValueChange = { onSetAutoDelayMs((it / 500f).roundToInt() * 500L) },
+                        valueRange = 1000f..5000f,
+                        steps = 7
+                    )
+
+                    val cooldownSec = (settings.cooldownMs / 100f).roundToInt() / 10f
+                    Text("ระยะพักขั้นต่ำ (Cooldown): $cooldownSec วินาที", style = MaterialTheme.typography.bodyMedium)
+                    Slider(
+                        value = settings.cooldownMs.toFloat(),
+                        onValueChange = { onSetCooldownMs((it / 500f).roundToInt() * 500L) },
+                        valueRange = 1000f..10000f,
+                        steps = 17
+                    )
+                } else {
+                    Text(
+                        text = "ระบบ Auto-scroll และการตั้งค่า Accessibility ไม่พร้อมใช้งานใน Manual Edition รุ่นนี้ใช้การจับภาพแบบกดเอง (Manual Capture) ผ่านปุ่มลอยและ MediaProjection เท่านั้น",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextSecondary,
+                        modifier = Modifier.testTag("settings_manual_autoscroll_unavailable")
+                    )
                 }
-
-                val delaySec = (settings.autoCaptureDelayMs / 100f).roundToInt() / 10f
-                Text("รอหลังหยุดเลื่อน: $delaySec วินาที (1.0 - 5.0 วินาที)", style = MaterialTheme.typography.bodyMedium)
-                Slider(
-                    value = settings.autoCaptureDelayMs.toFloat(),
-                    onValueChange = { onSetAutoDelayMs((it / 500f).roundToInt() * 500L) },
-                    valueRange = 1000f..5000f,
-                    steps = 7
-                )
-
-                val cooldownSec = (settings.cooldownMs / 100f).roundToInt() / 10f
-                Text("ระยะพักขั้นต่ำ (Cooldown): $cooldownSec วินาที", style = MaterialTheme.typography.bodyMedium)
-                Slider(
-                    value = settings.cooldownMs.toFloat(),
-                    onValueChange = { onSetCooldownMs((it / 500f).roundToInt() * 500L) },
-                    valueRange = 1000f..10000f,
-                    steps = 17
-                )
             }
 
             // 5. Overlay Appearance

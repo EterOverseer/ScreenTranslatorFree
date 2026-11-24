@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.app.AppContainer
+import com.example.core.edition.EditionConfig
 import com.example.core.permissions.PermissionStatus
 import com.example.domain.model.AppSettings
 import com.example.domain.model.CaptureMode
@@ -19,7 +20,8 @@ import kotlinx.coroutines.launch
 data class TranslatorUiState(
     val settings: AppSettings = AppSettings(),
     val translatorState: TranslatorState = TranslatorState(),
-    val permissions: PermissionStatus = PermissionStatus()
+    val permissions: PermissionStatus = PermissionStatus(),
+    val isAutoScrollSupported: Boolean = EditionConfig.isAutoScrollSupported
 )
 
 class TranslatorViewModel(private val container: AppContainer) : ViewModel() {
@@ -32,7 +34,8 @@ class TranslatorViewModel(private val container: AppContainer) : ViewModel() {
         TranslatorUiState(
             settings = settings,
             translatorState = translator,
-            permissions = permissions
+            permissions = permissions,
+            isAutoScrollSupported = container.isAutoScrollSupported
         )
     }.stateIn(
         scope = viewModelScope,
@@ -41,8 +44,9 @@ class TranslatorViewModel(private val container: AppContainer) : ViewModel() {
     )
 
     fun setCaptureMode(mode: CaptureMode) {
+        val normalized = EditionConfig.normalizeCaptureMode(mode)
         viewModelScope.launch {
-            container.settingsRepository.updateSettings { it.copy(captureMode = mode) }
+            container.settingsRepository.updateSettings { it.copy(captureMode = normalized) }
         }
     }
 

@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.app.AppContainer
+import com.example.core.edition.EditionConfig
 import com.example.core.security.KeystoreEncryptionException
 import com.example.domain.model.AppSettings
 import com.example.domain.model.CaptureMode
@@ -22,6 +23,7 @@ import kotlinx.coroutines.launch
 data class SettingsUiState(
     val settings: AppSettings = AppSettings(),
     val offlineModels: List<OfflineModelInfo> = emptyList(),
+    val isAutoScrollSupported: Boolean = EditionConfig.isAutoScrollSupported,
     val cryptoErrorMessage: String? = null
 )
 
@@ -37,6 +39,7 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
         SettingsUiState(
             settings = settings,
             offlineModels = models,
+            isAutoScrollSupported = container.isAutoScrollSupported,
             cryptoErrorMessage = cryptoError
         )
     }.stateIn(
@@ -49,7 +52,9 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
     fun setTargetLanguage(language: LanguageOption) = update { it.copy(targetLanguage = language) }
     fun setTranslationMode(mode: TranslationMode) = update { it.copy(translationMode = mode) }
     fun setHybridPriority(priority: HybridPriority) = update { it.copy(hybridPriority = priority) }
-    fun setCaptureMode(mode: CaptureMode) = update { it.copy(captureMode = mode) }
+    fun setCaptureMode(mode: CaptureMode) = update {
+        it.copy(captureMode = EditionConfig.normalizeCaptureMode(mode))
+    }
     fun setReadingDirection(dir: ReadingDirection) = update { it.copy(readingDirection = dir) }
     fun setAutoDelayMs(delayMs: Long) = update { it.copy(autoCaptureDelayMs = delayMs.coerceIn(1000L, 5000L)) }
     fun setCooldownMs(cooldownMs: Long) = update { it.copy(cooldownMs = cooldownMs.coerceIn(1000L, 10000L)) }

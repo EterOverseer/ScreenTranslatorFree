@@ -13,9 +13,15 @@ import org.robolectric.annotation.Config
 class ExampleRobolectricTest {
 
     @Test
-    fun `app name matches EterScreen`() {
+    fun `app name and package id match active flavor`() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val appName = context.getString(R.string.app_name)
-        assertEquals("EterScreen", appName)
+        if (BuildConfig.FLAVOR == "full") {
+            assertEquals("EterScreen Translator Full", appName)
+            assertEquals("com.eteroverseer.screentranslator.full", context.packageName)
+        } else {
+            assertEquals("EterScreen Translator", appName)
+            assertEquals("com.eteroverseer.screentranslator", context.packageName)
+        }
     }
 }

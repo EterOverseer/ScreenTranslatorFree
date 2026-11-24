@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.app.AppContainer
+import com.example.core.edition.EditionConfig
 import com.example.core.permissions.PermissionStatus
 import com.example.core.security.FirebaseConfigStatus
 import com.example.domain.model.AppSettings
@@ -23,7 +24,9 @@ data class PrivacyUiState(
     val permissions: PermissionStatus = PermissionStatus(),
     val offlineModels: List<OfflineModelInfo> = emptyList(),
     val recentErrors: List<DiagnosticErrorEntry> = emptyList(),
-    val firebaseStatus: FirebaseConfigStatus = FirebaseConfigStatus()
+    val firebaseStatus: FirebaseConfigStatus = FirebaseConfigStatus(),
+    val isAutoScrollSupported: Boolean = EditionConfig.isAutoScrollSupported,
+    val editionName: String = EditionConfig.editionDisplayName
 ) {
     val isNetworkTransmissionActive: Boolean
         get() = settings.aiEnabled && settings.translationMode != TranslationMode.OFFLINE
@@ -43,7 +46,9 @@ class PrivacyViewModel(private val container: AppContainer) : ViewModel() {
             translatorState = translator,
             permissions = permissions,
             offlineModels = models,
-            recentErrors = errors
+            recentErrors = errors,
+            isAutoScrollSupported = container.isAutoScrollSupported,
+            editionName = EditionConfig.editionDisplayName
         )
     }
 

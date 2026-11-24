@@ -113,8 +113,16 @@ fun PrivacyScreen(
 
             EterCard {
                 SectionHeader(title = "ตรวจสอบสิทธิ์ระบบและ Firebase", icon = Icons.Rounded.Security)
+                DiagnosticTextRow("รุ่นแอป (Edition)", uiState.editionName)
                 DiagnosticTextRow("ปุ่มลอย (Overlay)", if (uiState.permissions.hasOverlayPermission) "อนุญาตแล้ว" else "ยังไม่อนุญาต")
-                DiagnosticTextRow("ตรวจจับหยุดเลื่อน (Accessibility)", if (uiState.permissions.hasAccessibilityPermission) "เปิดใช้งาน" else "ปิด (ใช้โหมด Manual ได้)")
+                DiagnosticTextRow(
+                    "ตรวจจับหยุดเลื่อน (Accessibility)",
+                    when {
+                        !uiState.isAutoScrollSupported -> "ไม่มีใน Manual Edition (ไม่ประกาศ Service)"
+                        uiState.permissions.hasAccessibilityPermission -> "เปิดใช้งาน"
+                        else -> "ปิด (ใช้โหมด Manual ได้)"
+                    }
+                )
                 DiagnosticTextRow("การแจ้งเตือน (Notifications)", if (uiState.permissions.hasNotificationPermission) "อนุญาตแล้ว" else "ยังไม่อนุญาต")
                 DiagnosticTextRow("FirebaseApp", if (uiState.firebaseStatus.isFirebaseAppReady) "พร้อมใช้งาน" else "ยังไม่ได้ตั้งค่า (ออฟไลน์ใช้งานได้)")
                 DiagnosticTextRow("Firebase App Check", if (uiState.firebaseStatus.isAppCheckConfigured) "ตั้งค่าแล้ว" else "ยังไม่พร้อมใช้งาน")

@@ -9,6 +9,10 @@ plugins {
   alias(libs.plugins.google.services)
 }
 
+base {
+  archivesName.set("EterScreen-Translator")
+}
+
 android {
   namespace = "com.example"
   compileSdk { version = release(36) { minorApiLevel = 1 } }
@@ -21,6 +25,22 @@ android {
     versionName = "1.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+  }
+
+  flavorDimensions += "edition"
+  productFlavors {
+    create("manual") {
+      dimension = "edition"
+      applicationId = "com.eteroverseer.screentranslator"
+      buildConfigField("boolean", "AUTO_SCROLL_ENABLED", "false")
+      buildConfigField("String", "EDITION_NAME", "\"Manual Edition\"")
+    }
+    create("full") {
+      dimension = "edition"
+      applicationId = "com.eteroverseer.screentranslator.full"
+      buildConfigField("boolean", "AUTO_SCROLL_ENABLED", "true")
+      buildConfigField("String", "EDITION_NAME", "\"Full Edition\"")
+    }
   }
 
   // Do not remove or modify these signingConfigs. They are necessary for building, installing,

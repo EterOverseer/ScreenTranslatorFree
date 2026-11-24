@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.app.AppContainer
+import com.example.core.edition.EditionConfig
 import com.example.core.permissions.PermissionStatus
 import com.example.core.security.FirebaseConfigStatus
 import com.example.domain.model.AppSettings
@@ -21,6 +22,8 @@ data class HomeUiState(
     val permissions: PermissionStatus = PermissionStatus(),
     val offlineModels: List<OfflineModelInfo> = emptyList(),
     val firebaseStatus: FirebaseConfigStatus = FirebaseConfigStatus(),
+    val isAutoScrollSupported: Boolean = EditionConfig.isAutoScrollSupported,
+    val editionName: String = EditionConfig.editionDisplayName,
     val showAiConsentDialog: Boolean = false
 )
 
@@ -39,6 +42,8 @@ class HomeViewModel(private val container: AppContainer) : ViewModel() {
             permissions = permissions,
             offlineModels = models,
             firebaseStatus = firebaseStatus,
+            isAutoScrollSupported = container.isAutoScrollSupported,
+            editionName = EditionConfig.editionDisplayName,
             showAiConsentDialog = false
         )
     }.stateIn(

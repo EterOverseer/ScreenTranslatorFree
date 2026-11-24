@@ -23,6 +23,7 @@ import android.widget.TextView
 import android.widget.Toast
 import com.example.MainActivity
 import com.example.R
+import com.example.core.edition.EditionConfig
 import com.example.core.permissions.PermissionHelper
 import com.example.domain.model.AppSettings
 import com.example.domain.model.CaptureMode
@@ -460,6 +461,7 @@ class FloatingOverlayManager(
         }
 
         val autoText = when {
+            !EditionConfig.isAutoScrollSupported -> "Manual Edition"
             currentSettings.captureMode == CaptureMode.MANUAL -> "โหมดกดเอง"
             currentState.isAutoScrollServiceConnected -> "Auto: เปิด"
             else -> "Auto: รอสิทธิ์"
@@ -477,7 +479,11 @@ class FloatingOverlayManager(
         }
 
         panelTranslatedText?.text = currentState.lastTranslatedText.ifBlank {
-            "กดปุ่ม 'แปลหน้าจอ' หรือหยุดเลื่อนเพื่อเริ่มแปล"
+            if (EditionConfig.isAutoScrollSupported) {
+                "กดปุ่ม 'แปลหน้าจอ' หรือหยุดเลื่อนเพื่อเริ่มแปล"
+            } else {
+                "กดปุ่ม 'แปลหน้าจอ' เพื่อจับภาพและแปลทันที"
+            }
         }
         panelSourceText?.text = currentState.lastOcrText.ifBlank {
             "ยังไม่มีข้อความ OCR"

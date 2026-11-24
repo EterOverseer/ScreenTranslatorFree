@@ -1,4 +1,4 @@
-name: Build & Publish Prebuilt APK
+name: Build & Publish Prebuilt APKs (Manual & Full)
 
 on:
   push:
@@ -11,19 +11,10 @@ on:
       - main
   workflow_dispatch:
     inputs:
-      build_type:
-        description: "APK build variant"
-        required: true
-        default: "debug"
-        type: choice
-        options:
-          - debug
-          - release
-          - both
       publish_release:
-        description: "Publish APK to GitHub Releases"
+        description: "Publish Manual & Full Debug APKs to GitHub Releases"
         required: true
-        default: true
+        default: false
         type: boolean
 
 permissions:
@@ -34,8 +25,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-apk:
-    name: Test & Build EterScreen Translator APK
+  build-editions:
+    name: Test, Build & Verify Manual + Full Editions
     runs-on: ubuntu-latest
 
     steps:
@@ -64,7 +55,7 @@ jobs:
             echo "$GOOGLE_SERVICES_JSON_B64" | base64 --decode > app/google-services.json
             echo "Restored app/google-services.json from repository secret."
           else
-            echo "GOOGLE_SERVICES_JSON_B64 not set; building Offline-ready APK (MissingGoogleServicesStrategy.WARN)."
+            echo "GOOGLE_SERVICES_JSON_B64 not set; building Offline-ready APKs (MissingGoogleServicesStrategy.WARN)."
           fi
 
       - name: Ensure debug keystore exists
@@ -81,76 +72,95 @@ jobs:
               -dname "CN=Android Debug,O=Android,C=US"
           fi
 
-      - name: Run unit and Robolectric tests
+      - name: Run Manual Edition unit and Robolectric tests
         run: |
           if [ -x ./gradlew ]; then
-            ./gradlew :app:testDebugUnitTest --stacktrace
+            ./gradlew :app:testManualDebugUnitTest --stacktrace
           else
-            gradle :app:testDebugUnitTest --stacktrace
+            gradle :app:testManualDebugUnitTest --stacktrace
           fi
 
-      - name: Build Debug APK
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.build_type == 'debug' || inputs.build_type == 'both' }}
+      - name: Run Full Edition unit and Robolectric tests
         run: |
           if [ -x ./gradlew ]; then
-            ./gradlew :app:assembleDebug --stacktrace
+            ./gradlew :app:testFullDebugUnitTest --stacktrace
           else
-            gradle :app:assembleDebug --stacktrace
+            gradle :app:testFullDebugUnitTest --stacktrace
           fi
-          mkdir -p dist
-          cp app/build/outputs/apk/debug/app-debug.apk dist/EterScreen-Translator-debug.apk
-          (cd dist && sha256sum EterScreen-Translator-debug.apk > EterScreen-Translator-debug.apk.sha256)
-          ls -lh dist/EterScreen-Translator-debug.apk
 
-      - name: Build Release APK (optional when signing secrets exist)
-        if: ${{ (github.event_name == 'workflow_dispatch' && (inputs.build_type == 'release' || inputs.build_type == 'both')) || startsWith(github.ref, 'refs/tags/v') }}
-        env:
-          RELEASE_KEYSTORE_B64: ${{ secrets.RELEASE_KEYSTORE_B64 }}
-          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+      - name: Build Manual Debug APK
         run: |
-          if [ -z "$RELEASE_KEYSTORE_B64" ] || [ -z "$STORE_PASSWORD" ] || [ -z "$KEY_PASSWORD" ]; then
-            echo "Release signing secrets (RELEASE_KEYSTORE_B64, STORE_PASSWORD, KEY_PASSWORD) are not configured; skipping assembleRelease."
-            exit 0
-          fi
-          echo "$RELEASE_KEYSTORE_B64" | base64 --decode > my-upload-key.jks
-          export KEYSTORE_PATH="${{ github.workspace }}/my-upload-key.jks"
           if [ -x ./gradlew ]; then
-            ./gradlew :app:assembleRelease --stacktrace
+            ./gradlew :app:assembleManualDebug --stacktrace
           else
-            gradle :app:assembleRelease --stacktrace
+            gradle :app:assembleManualDebug --stacktrace
           fi
-          mkdir -p dist
-          cp app/build/outputs/apk/release/app-release.apk dist/EterScreen-Translator-release.apk
-          (cd dist && sha256sum EterScreen-Translator-release.apk > EterScreen-Translator-release.apk.sha256)
-          ls -lh dist/EterScreen-Translator-release.apk
+          mkdir -p dist/manual
+          cp app/build/outputs/apk/manual/debug/EterScreen-Translator-manual-debug.apk dist/manual/
+          (cd dist/manual && sha256sum EterScreen-Translator-manual-debug.apk > EterScreen-Translator-manual-debug.apk.sha256)
+          ls -lh dist/manual/EterScreen-Translator-manual-debug.apk
+
+      - name: Build Full Debug APK
+        run: |
+          if [ -x ./gradlew ]; then
+            ./gradlew :app:assembleFullDebug --stacktrace
+          else
+            gradle :app:assembleFullDebug --stacktrace
+          fi
+          mkdir -p dist/full
+          cp app/build/outputs/apk/full/debug/EterScreen-Translator-full-debug.apk dist/full/
+          (cd dist/full && sha256sum EterScreen-Translator-full-debug.apk > EterScreen-Translator-full-debug.apk.sha256)
+          ls -lh dist/full/EterScreen-Translator-full-debug.apk
+
+      - name: Verify merged manifests and packaged APKs (Manual vs Full)
+        run: python3 scripts/verify_flavor_manifests.py
 
       - name: Clean up sensitive transient build files
         if: always()
         run: rm -f app/google-services.json my-upload-key.jks
 
-      - name: Upload test report artifact
+      - name: Upload Manual Edition test report artifact
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: unit-test-report
-          path: app/build/reports/tests/testDebugUnitTest/
+          name: unit-test-report-manual
+          path: app/build/reports/tests/testManualDebugUnitTest/
           if-no-files-found: ignore
           retention-days: 14
 
-      - name: Upload prebuilt APK artifact
+      - name: Upload Full Edition test report artifact
+        if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: EterScreen-Translator-APK
-          path: dist/*
+          name: unit-test-report-full
+          path: app/build/reports/tests/testFullDebugUnitTest/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload Manual Edition Debug APK (Primary Testing Download)
+        uses: actions/upload-artifact@v7
+        with:
+          name: EterScreen-Translator-manual-debug
+          path: dist/manual/*
           retention-days: 30
 
-      - name: Publish prebuilt APK to GitHub Releases
-        if: ${{ github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish_release)) }}
+      - name: Upload Full Edition Debug APK (Includes Accessibility Auto-Scroll)
+        uses: actions/upload-artifact@v7
+        with:
+          name: EterScreen-Translator-full-debug
+          path: dist/full/*
+          retention-days: 30
+
+      - name: Publish Manual & Full Debug APKs to GitHub Releases
+        if: ${{ github.event_name != 'pull_request' && (startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish_release)) }}
         uses: softprops/action-gh-release@v3
         with:
-          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'latest-debug' }}
-          name: ${{ startsWith(github.ref, 'refs/tags/') && format('EterScreen Translator {0}', github.ref_name) || 'EterScreen Translator (Latest Prebuilt APK)' }}
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'latest-editions-debug' }}
+          name: ${{ startsWith(github.ref, 'refs/tags/') && format('EterScreen Translator {0}', github.ref_name) || 'EterScreen Translator (Manual Primary + Full Prebuilt APKs)' }}
           prerelease: ${{ !startsWith(github.ref, 'refs/tags/v') }}
           generate_release_notes: ${{ startsWith(github.ref, 'refs/tags/v') }}
-          files: dist/*
+          files: |
+            dist/manual/EterScreen-Translator-manual-debug.apk
+            dist/manual/EterScreen-Translator-manual-debug.apk.sha256
+            dist/full/EterScreen-Translator-full-debug.apk
+            dist/full/EterScreen-Translator-full-debug.apk.sha256

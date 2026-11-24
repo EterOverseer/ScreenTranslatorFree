@@ -4,94 +4,132 @@
 
 ---
 
+## รุ่นของแอป (Product Flavors: Manual vs Full Edition)
+
+โปรเจกต์แบ่งออกเป็น 2 รุ่นย่อย (Product Flavors ในมิติ `edition`) เพื่อแยกโครงสร้าง Manifest และลดการประกาศสิทธิ์ที่ไม่จำเป็นในรุ่น Manual:
+
+| คุณสมบัติ | **Manual Edition (`manual`) — แนะนำสำหรับทดสอบทั่วไป** | **Full Edition (`full`)** |
+|---|---|---|
+| **ชื่อแสดงบนเครื่อง** | `EterScreen Translator` | `EterScreen Translator Full` |
+| **Application ID** | `com.eteroverseer.screentranslator` | `com.eteroverseer.screentranslator.full` |
+| **การประกาศ Accessibility Service** | **ไม่มี** (ไม่รวมใน merged `AndroidManifest.xml`) | **มี** (`AutoScrollAccessibilityService`, `canRetrieveWindowContent="false"`) |
+| **Auto-scroll Detection** | ปิดการใช้งาน (แสดงข้อความแจ้งใน UI) | เปิดใช้งาน (`TYPE_VIEW_SCROLLED` เท่านั้น) |
+| **Manual Screen Capture (`MediaProjection`)** | ใช้งานได้เต็มรูปแบบ | ใช้งานได้เต็มรูปแบบ |
+| **ML Kit OCR / Offline / Gemini AI / Overlay / History** | ใช้งานได้เต็มรูปแบบ | ใช้งานได้เต็มรูปแบบ |
+
+> **หมายเหตุด้าน Google Play Protect:** รุ่น **Manual Edition** ถูกออกแบบมาโดย **ไม่ประกาศ Accessibility Service ใน Manifest** ของ APK เพื่อหลีกเลี่ยงตัวกระตุ้นการเตือนจากบริการ Accessibility อย่างไรก็ตาม การยอมรับหรือการบล็อกของ Google Play Protect / Enhanced Fraud Protection ขึ้นอยู่กับการประเมินจริงบนอุปกรณ์ปลายทาง ผู้ใช้จำเป็นต้องทดสอบติดตั้งบนอุปกรณ์จริงด้วยตนเอง (การถอด Accessibility Service ช่วยตัดเงื่อนไขนี้ แต่ไม่ถือเป็นการรับประกันผลการตรวจสอบของ Google)
+
+---
+
 ## ความสามารถหลัก
 
 1. **โหมดการแปล 3 รูปแบบ (`TranslationRouter`)**
    - **Offline Mode (`OfflineTranslationEngine`)**: ใช้ ML Kit OCR + Language Identification + ML Kit On-Device Translation (`ja`, `ko`, `en` → `th`) ประมวลผลบนเครื่อง 100% ไม่ส่งข้อมูลออกนอกเครื่อง และตรวจสอบสถานะโมเดลจริงก่อนแปล
-   - **Gemini AI Mode (`GeminiTranslationEngine`)**: เชื่อมต่อผ่าน **Firebase AI Logic (`Firebase.ai`) + App Check** โดยไม่ต้องฝัง API Key ในซอร์สโค้ด พร้อมคำสั่งแปลเฉพาะทางมังงะ/มันฮวา (รักษาอารมณ์ตัวละคร สรรพนาม คำเลียนเสียง `[SFX]` และไม่แต่งประโยคเพิ่ม)
+   - **Gemini AI Mode (`GeminiTranslationEngine`)**: เชื่อมต่อผ่าน **Firebase AI Logic (`Firebase.ai`, โมเดล `gemini-3.8-flash`) + App Check** โดยไม่ต้องฝัง API Key ในซอร์สโค้ด พร้อมคำสั่งแปลเฉพาะทางมังงะ/มันฮวา
    - **Hybrid Mode (ค่าเริ่มต้น)**: อ่าน OCR บนเครื่องก่อน แล้วเลือกแปลออฟไลน์ก่อนหรือเน้น Gemini AI ตามที่ผู้ใช้ตั้งค่า พร้อม Bounded LRU Cache และระบบป้องกันการส่งข้อมูลเมื่อผู้ใช้ปิด AI
 2. **ระบบจับภาพหน้าจอ (`MediaProjection` + `ScreenCaptureForegroundService`)**
    - ทำงานผ่าน Foreground Service (`foregroundServiceType="mediaProjection"`) พร้อมแถบแจ้งเตือนที่มีปุ่ม **หยุดทันที** และ **พัก/ทำต่อ**
    - จัดการการหมุนหน้าจอ/เปลี่ยนขนาดหน้าต่าง ปล่อยทรัพยากร `VirtualDisplay`, `ImageReader`, `Bitmap` อย่างปลอดภัย และเคารพ `FLAG_SECURE`
    - ไม่บันทึกภาพหน้าจอถาวรเป็นค่าเริ่มต้น
-3. **ระบบตรวจจับหยุดเลื่อนอัตโนมัติ (`AutoScrollAccessibilityService` - ตัวเลือกเสริม)**
+3. **ระบบตรวจจับหยุดเลื่อนอัตโนมัติ (`AutoScrollAccessibilityService` — เฉพาะ Full Edition)**
+   - ประกาศเฉพาะใน `app/src/full/AndroidManifest.xml`
    - ฟังเฉพาะ Event การเลื่อนหน้าจอจริง (`TYPE_VIEW_SCROLLED`) โดยตั้งค่า `canRetrieveWindowContent="false"` และกรอง Event จากแอปตัวเอง, SystemUI รวมถึง Event พิกัดซ้ำ
-   - มี Debounce ปรับได้ 1.0 – 5.0 วินาที (ค่าเริ่มต้น 1.5 วินาที), Cooldown และ dHash Screen Deduplication เพื่อไม่แปลหน้าเดิมซ้ำ
-   - ใช้งานโหมดกดแปลเอง (Manual) ได้สมบูรณ์แม้ไม่ได้เปิด Accessibility
+   - มี Debounce ปรับได้ 1.0 – 5.0 วินาที (ค่าเริ่มต้น 1.5 วินาที), Cooldown และ dHash Screen Deduplication
 4. **ตัวจัดการบริบทมังงะ (`MangaContextProcessor`)**
    - จัดกลุ่มกล่องข้อความตามบอลลูนคำพูด ไม่รวมข้อความข้ามพาเนล
    - เรียงลำดับอ่านแบบ **ขวาไปซ้าย (RTL)** สำหรับมังงะญี่ปุ่น และ **บนลงล่าง/ซ้ายไปขวา (LTR)** สำหรับมันฮวาเกาหลี
-   - ตรวจจับคำเลียนเสียง (SFX) และเก็บความจำบริบท 3–6 บรรทัดล่าสุดสำหรับความต่อเนื่องของชื่อตัวละคร
+
+---
+
+## สิทธิ์ที่แต่ละรุ่นใช้งาน
+
+### Manual Edition (`com.eteroverseer.screentranslator`)
+- **`FOREGROUND_SERVICE` / `FOREGROUND_SERVICE_MEDIA_PROJECTION`**: สำหรับจับภาพหน้าจอเมื่อผู้ใช้กดอนุญาต
+- **`SYSTEM_ALERT_WINDOW`**: สำหรับแสดงปุ่มลอยและหน้าต่างคำแปลทับแอปอื่น (`WindowManager`)
+- **`POST_NOTIFICATIONS`** *(Android 13+)*: สำหรับแสดงการแจ้งเตือนสถานะจับภาพและปุ่มหยุดด่วน
+- **`INTERNET` / `ACCESS_NETWORK_STATE`**: สำหรับดาวน์โหลดโมเดล ML Kit และเรียก Gemini AI (เมื่อผู้ใช้เปิดใช้งาน)
+- *(ไม่มี `AutoScrollAccessibilityService` และไม่มี `BIND_ACCESSIBILITY_SERVICE` ใน Manifest)*
+
+### Full Edition (`com.eteroverseer.screentranslator.full`)
+- ใช้สิทธิ์ทั้งหมดข้างต้น **ร่วมกับ**
+- **`BIND_ACCESSIBILITY_SERVICE`** *(ตัวเลือกเสริม เปิดใช้ด้วยตนเองในการตั้งค่า Android)*: สำหรับ `AutoScrollAccessibilityService` เพื่อจับจังหวะหยุดเลื่อนหน้าจอ (`canRetrieveWindowContent="false"`)
+
+---
+
+## วิธีใช้งาน
+
+### การใช้งาน Manual Capture (ใช้ได้ทั้ง Manual และ Full Edition)
+1. เปิดแอปแล้วอนุญาตสิทธิ์ **หน้าต่างลอย (Overlay)** และการแจ้งเตือน (หากระบบถาม)
+2. กดปุ่ม **เริ่มแปลหน้าจอ** และยืนยันสิทธิ์จับภาพหน้าจอ **MediaProjection**
+3. เปิดแอปมังงะหรือแอปที่ต้องการแปล แล้วแตะ **ปุ่มลอย** (หรือกดปุ่ม **จับภาพและแปลทันที** ในหน้าควบคุม) เพื่อจับภาพหน้าจอปัจจุบันและแปลเป็นภาษาไทยทันที
+
+### การตั้งค่า Auto-scroll (เฉพาะ Full Edition)
+1. ติดตั้งรุ่น **Full Edition** (`EterScreen Translator Full`)
+2. ในหน้าแรก กดปุ่ม **ตั้งค่า** ข้างรายการ Accessibility (หรือไปที่ **การตั้งค่า Android → การช่วยเหลือการเข้าถึง → EterScreen Translator Full**) แล้วเปิดบริการ
+3. เลือกโหมดจับภาพเป็น **อัตโนมัติ (Auto)** หรือ **ทั้งกดเองและอัตโนมัติ** และปรับระยะหน่วง/Cooldown ได้ในหน้าตั้งค่า
 
 ---
 
 ## การตั้งค่า Firebase AI Logic และ App Check
 
-> **หมายเหตุสำคัญ:** แอปสามารถใช้งาน **Offline Mode** (ML Kit OCR + Language ID + On-Device Translation) ได้เต็มรูปแบบแม้ยังไม่ได้ตั้งค่า Firebase
+> **หมายเหตุสำคัญ:** ทั้งสองรุ่นสามารถใช้งาน **Offline Mode** (ML Kit OCR + Language ID + On-Device Translation) ได้เต็มรูปแบบแม้ยังไม่ได้ตั้งค่า Firebase
 
 หากต้องการเปิดใช้งาน **Gemini AI Mode (`gemini-3.8-flash`)**:
 
-1. **Android App Package Name:** ลงทะเบียนแอปใน Firebase Console ด้วย `package_name` = `com.eteroverseer.screentranslator`
+1. **Android App Package Name:** ลงทะเบียนแอปใน Firebase Console ตามรุ่นที่ใช้งาน:
+   - Manual Edition: `com.eteroverseer.screentranslator`
+   - Full Edition: `com.eteroverseer.screentranslator.full`
 2. **เปิดใช้งาน Firebase AI Logic** และ **Firebase App Check** ในโปรเจกต์ Firebase ของคุณ
-3. **เพิ่มไฟล์ `app/google-services.json`:** ดาวน์โหลดจาก Firebase Console แล้ววางในโฟลเดอร์ `app/` *(ไฟล์นี้ถูกยกเว้นใน `.gitignore` เพื่อไม่ให้คอมมิตข้อมูลโปรเจกต์ขึ้น Repository)*
-4. **App Check สำหรับ Debug Build (`BuildConfig.DEBUG`):**
-   - `AppCheckInitializer` จะติดตั้ง `DebugAppCheckProviderFactory` โดยอัตโนมัติ (หรือรับ `FIREBASE_APPCHECK_DEBUG_TOKEN` ผ่าน Launch Intent Extra ในสภาพแวดล้อมทดสอบโดยไม่บันทึกค่า Token ลง Log)
-   - นำ Debug Token ที่ลงทะเบียนไว้ใน Firebase App Check Console มาใช้งานทดสอบได้ทันที
-5. **App Check สำหรับ Release Build (`!BuildConfig.DEBUG`):**
-   - กำหนด String Resource `recaptcha_site_key` (จาก reCAPTCHA Enterprise / Firebase App Check) ก่อนคอมไพล์ Release APK เพื่อให้ `RecaptchaAppCheckProviderFactory` ทำงานได้
-6. **กรณีไม่พบการตั้งค่า Firebase:** แอปจะไม่แครชและจะแสดงสถานะชัดเจนในหน้าหลัก/หน้าความเป็นส่วนตัวว่ายังไม่ได้ตั้งค่า Firebase โดยยังคงให้ใช้งานโหมดออฟไลน์ได้ตามปกติ
+3. **เพิ่มไฟล์ `app/google-services.json`:** ดาวน์โหลดจาก Firebase Console แล้ววางในโฟลเดอร์ `app/` *(ไฟล์นี้ถูกยกเว้นใน `.gitignore`)*
+4. **App Check สำหรับ Debug Build (`BuildConfig.DEBUG`):** `AppCheckInitializer` ติดตั้ง `DebugAppCheckProviderFactory` อัตโนมัติโดยไม่บันทึกค่า Debug Token ลง Log
+5. **App Check สำหรับ Release Build (`!BuildConfig.DEBUG`):** กำหนด String Resource `recaptcha_site_key` ก่อนคอมไพล์ Release APK เพื่อใช้งาน `RecaptchaAppCheckProviderFactory`
 
 ---
 
-## สิทธิ์ที่แอปใช้งาน
+## คำสั่งสร้าง APK และรันการทดสอบ
 
-- **`FOREGROUND_SERVICE` / `FOREGROUND_SERVICE_MEDIA_PROJECTION`**: สำหรับบริการจับภาพหน้าจอ `MediaProjection`
-- **`SYSTEM_ALERT_WINDOW`**: สำหรับแสดงปุ่มลอยและหน้าต่างคำแปลทับแอปอื่น (`WindowManager`)
-- **`BIND_ACCESSIBILITY_SERVICE`** *(ตัวเลือกเสริม)*: สำหรับตรวจจับจังหวะหยุดเลื่อนหน้าจอในโหมด Auto
-- **`POST_NOTIFICATIONS`** *(Android 13+)*: สำหรับแสดงการแจ้งเตือนสถานะจับภาพและปุ่มหยุดด่วน
-- **`INTERNET` / `ACCESS_NETWORK_STATE`**: สำหรับดาวน์โหลดโมเดล ML Kit ครั้งแรก และเรียกใช้ Gemini AI เมื่อผู้ใช้เปิดใช้งาน
+> บนเครื่องที่มี Gradle Wrapper ให้ใช้ `./gradlew` (Linux/macOS) หรือ `gradlew.bat` (Windows) และหากสภาพแวดล้อมใช้ Gradle ที่ติดตั้งไว้ในระบบโดยตรง สามารถแทนด้วยคำสั่ง `gradle`
 
----
+### Linux / macOS
+```bash
+# รัน Unit & Robolectric Tests แยกแต่ละรุ่น
+./gradlew :app:testManualDebugUnitTest
+./gradlew :app:testFullDebugUnitTest
 
-## ข้อจำกัดที่ควรทราบ
+# สร้าง Debug APK แยกแต่ละรุ่น
+./gradlew :app:assembleManualDebug
+./gradlew :app:assembleFullDebug
 
-- หน้าจอแอปที่เปิด **`FLAG_SECURE`** (เช่น แอปธนาคารหรือแอปสตรีมมิ่งบางชนิด) ระบบ Android จะไม่อนุญาตให้ `MediaProjection` อ่านภาพได้
-- การแปลภาษาไทยแบบ **Offline (ML Kit)** จำเป็นต้องดาวน์โหลดแพ็กเกจภาษาต้นทาง (`JA`/`KO`/`EN`) และภาษาไทย (`TH`) ลงเครื่องก่อน (~30 MB ต่อภาษา) จึงจะใช้งานแบบไร้เน็ตได้
-- ข้อความแนวตั้งที่เขียนด้วยฟอนต์ศิลป์หรือสติกเกอร์ทับลายเส้นหนาในมังงะ อาจอ่านคลาดเคลื่อนได้บ้าง ผู้ใช้สามารถแก้ไขข้อความ OCR ในหน้า **ควบคุม** ก่อนกดแปลใหม่ได้ทันที
+# ตรวจสอบ Merged Manifest และ Packaged APK ของทั้งสองรุ่น
+python3 scripts/verify_flavor_manifests.py
+```
 
----
+### Windows (Command Prompt / PowerShell)
+```bat
+REM รัน Unit & Robolectric Tests แยกแต่ละรุ่น
+gradlew.bat :app:testManualDebugUnitTest
+gradlew.bat :app:testFullDebugUnitTest
 
-## ขั้นตอนการสร้างไฟล์ APK (Build & Release)
+REM สร้าง Debug APK แยกแต่ละรุ่น
+gradlew.bat :app:assembleManualDebug
+gradlew.bat :app:assembleFullDebug
 
-> **ข้อควรระวังสำหรับ Production APK:** หลีกเลี่ยงการใช้ Debug Keystore สำหรับการติดตั้งจริงระยะยาว ให้กำหนด Upload/Release Keystore ผ่านตัวแปรสภาพแวดล้อมของระบบบิลด์ (`KEYSTORE_PATH`, `STORE_PASSWORD`, `KEY_PASSWORD`)
+REM ตรวจสอบ Merged Manifest และ Packaged APK
+python scripts\verify_flavor_manifests.py
+```
 
-1. ตรวจสอบว่าได้วาง `app/google-services.json` ของคุณแล้ว (กรณีต้องการใช้ Gemini AI)
-2. รันชุดทดสอบ Unit & Robolectric:
-   ```bash
-   gradle :app:testDebugUnitTest
-   ```
-   *(หรือ `./gradlew :app:testDebugUnitTest` บนเครื่องที่มี Gradle Wrapper)*
-3. สร้าง Debug APK สำหรับทดสอบบนอุปกรณ์ (เช่น RedMagic 11S Pro):
-   ```bash
-   gradle :app:assembleDebug
-   ```
-   ไฟล์ APK จะอยู่ที่ `app/build/outputs/apk/debug/app-debug.apk`
-4. สร้าง Release APK (เมื่อกำหนด Release Keystore แล้ว):
-   ```bash
-   gradle :app:assembleRelease
-   ```
-   ไฟล์ APK จะอยู่ที่ `app/build/outputs/apk/release/app-release.apk`
+### ตำแหน่งไฟล์ APK ที่ได้
+- **Manual Edition (Primary):** `app/build/outputs/apk/manual/debug/EterScreen-Translator-manual-debug.apk`
+- **Full Edition:** `app/build/outputs/apk/full/debug/EterScreen-Translator-full-debug.apk`
 
 ---
 
-## GitHub Actions (สร้างและเผยแพร่ Prebuilt APK อัตโนมัติ)
+## GitHub Actions (CI/CD)
 
-ไฟล์ Workflow อยู่ที่ `.github/workflows/build-apk.yml` โดยจะทำงานอัตโนมัติเมื่อมีการ Push ขึ้น Branch `main`, สร้าง Tag `v*`, เปิด Pull Request หรือกดสั่งรันผ่าน **Actions → Build & Publish Prebuilt APK → Run workflow**:
+Workflow อยู่ที่ `.github/workflows/build-apk.yml` โดยทำงานกับ **Node.js 24 actions**, **JDK 21 (Temurin)** และ **Gradle 9.3.1**:
 
-- รัน `testDebugUnitTest` (Unit & Robolectric) และ `assembleDebug`
-- อัปโหลดไฟล์ `EterScreen-Translator-debug.apk` (+ `.sha256`) เป็น **Workflow Artifact**
-- เผยแพร่ Prebuilt APK ไปยัง **GitHub Releases** (อัปเดต Release `latest-debug` บน Branch `main` หรือ Release ตาม Tag `v*`)
-- **Repository Secrets (ตัวเลือกเสริม):**
-  - `GOOGLE_SERVICES_JSON_B64`: เนื้อหา `app/google-services.json` แบบ Base64 เพื่อเปิดใช้ Gemini AI ใน APK ที่บิลด์จาก CI (หากไม่ตั้งค่า แอปยังบิลด์ผ่านและใช้โหมดออฟไลน์ได้ตามปกติ)
-  - `RELEASE_KEYSTORE_B64`, `STORE_PASSWORD`, `KEY_PASSWORD`: สำหรับเซ็นชื่อ Release APK เมื่อรัน Tag `v*` หรือ `workflow_dispatch` แบบ `release` / `both`
-
+- รัน `:app:testManualDebugUnitTest` และ `:app:testFullDebugUnitTest` พร้อมอัปโหลดรายงานทดสอบแยกทั้ง 2 รุ่น
+- สร้างทั้ง **Manual Debug APK** และ **Full Debug APK**
+- รัน `scripts/verify_flavor_manifests.py` ตรวจยืนยันทั้ง Merged Manifest และ Packaged APK (CI จะล้มเหลวทันทีหากรุ่น Manual มี Accessibility Service หรือรุ่น Full ขาด Service)
+- อัปโหลด **Manual APK** (`EterScreen-Translator-manual-debug`) เป็น Artifact หลัก และอัปโหลด **Full APK** (`EterScreen-Translator-full-debug`) แยกต่างหากชัดเจน
+- **Repository Secrets (ตัวเลือกเสริม):** `GOOGLE_SERVICES_JSON_B64` สำหรับใส่ `app/google-services.json` ใน CI (หากไม่กำหนด แอปยังบิลด์ผ่านและใช้โหมดออฟไลน์ได้ตามปกติ)

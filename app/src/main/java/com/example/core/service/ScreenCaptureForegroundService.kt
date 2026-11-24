@@ -17,6 +17,7 @@ import com.example.MainActivity
 import com.example.R
 import com.example.app.AppContainer
 import com.example.app.EterScreenApplication
+import com.example.core.edition.EditionConfig
 import com.example.core.overlay.FloatingOverlayManager
 import com.example.domain.model.AppSettings
 import com.example.domain.model.CaptureMode
@@ -184,7 +185,8 @@ class ScreenCaptureForegroundService : Service() {
     }
 
     private fun syncAutoCaptureScheduler(settings: AppSettings, status: CaptureStatus) {
-        val autoAllowed = settings.captureMode != CaptureMode.MANUAL &&
+        val autoAllowed = EditionConfig.isAutoScrollSupported &&
+            settings.captureMode != CaptureMode.MANUAL &&
             !isPaused &&
             status != CaptureStatus.PAUSED &&
             container.screenCaptureManager.isSessionActive.value

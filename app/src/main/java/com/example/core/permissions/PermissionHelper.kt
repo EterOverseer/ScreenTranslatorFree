@@ -10,7 +10,7 @@ import android.os.Build
 import android.provider.Settings
 import android.text.TextUtils
 import androidx.core.content.ContextCompat
-import com.example.core.service.AutoScrollAccessibilityService
+import com.example.core.service.AutoScrollBridge
 
 data class PermissionStatus(
     val hasOverlayPermission: Boolean = false,
@@ -46,21 +46,7 @@ object PermissionHelper {
     }
 
     fun isAccessibilityServiceEnabled(context: Context): Boolean {
-        val expectedComponent = ComponentName(context, AutoScrollAccessibilityService::class.java)
-        val enabledServices = Settings.Secure.getString(
-            context.contentResolver,
-            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
-        ) ?: return false
-
-        val splitter = TextUtils.SimpleStringSplitter(':')
-        splitter.setString(enabledServices)
-        while (splitter.hasNext()) {
-            val componentName = ComponentName.unflattenFromString(splitter.next())
-            if (componentName == expectedComponent) {
-                return true
-            }
-        }
-        return false
+        return AutoScrollBridge.isServiceEnabled(context)
     }
 
     fun createOverlaySettingsIntent(context: Context): Intent {
@@ -70,8 +56,7 @@ object PermissionHelper {
         ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     }
 
-    fun createAccessibilitySettingsIntent(): Intent {
-        return Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    fun createAccessibilitySettingsIntent(): Intent? {
+        return AutoScrollBridge.createSettingsIntent()
     }
 }

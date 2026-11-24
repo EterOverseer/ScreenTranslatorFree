@@ -153,7 +153,7 @@ fun HomeScreen(
                             containerColor = if (isActive) StatusSuccessContainer else ElectricCyanContainer
                         )
                         StatusPill(
-                            text = settings.translationMode.displayThai,
+                            text = "${uiState.editionName} • ${settings.translationMode.displayThai}",
                             color = CobaltBlue,
                             containerColor = CharcoalVoid.copy(alpha = 0.8f),
                             showDot = false
@@ -189,7 +189,11 @@ fun HomeScreen(
                         )
                         Text(
                             text = if (isActive) {
-                                "กดปุ่มลอยบนหน้าจอหรือหยุดเลื่อนเพื่อแปลอัตโนมัติ"
+                                if (uiState.isAutoScrollSupported) {
+                                    "กดปุ่มลอยบนหน้าจอหรือหยุดเลื่อนเพื่อแปลอัตโนมัติ"
+                                } else {
+                                    "กดปุ่มลอยบนหน้าจอเพื่อจับภาพและแปลทันที (Manual Edition)"
+                                }
                             } else {
                                 "ระบบจะขอสิทธิ์จับภาพหน้าจอ MediaProjection เพื่ออ่านข้อความ"
                             },
@@ -273,7 +277,11 @@ fun HomeScreen(
                 )
                 SummaryRow(
                     label = "โหมดการจับภาพ",
-                    value = settings.captureMode.displayThai
+                    value = if (uiState.isAutoScrollSupported) {
+                        settings.captureMode.displayThai
+                    } else {
+                        "กดแปลเอง (Manual Edition — ไม่มี Auto-scroll)"
+                    }
                 )
                 SummaryRow(
                     label = "โมเดลออฟไลน์ (ML Kit)",
@@ -320,7 +328,11 @@ fun HomeScreen(
                 SectionHeader(
                     title = "สิทธิ์ที่จำเป็นและการเข้าถึง",
                     icon = Icons.Rounded.Shield,
-                    subtitle = "โหมดกดแปลเองใช้งานได้แม้ยังไม่เปิด Accessibility"
+                    subtitle = if (uiState.isAutoScrollSupported) {
+                        "โหมดกดแปลเองใช้งานได้แม้ยังไม่เปิด Accessibility"
+                    } else {
+                        "Manual Edition ใช้เฉพาะ MediaProjection และปุ่มลอย (ไม่ประกาศ Accessibility Service)"
+                    }
                 )
                 PermissionStatusRow(
                     icon = Icons.Rounded.CameraAlt,
@@ -340,15 +352,46 @@ fun HomeScreen(
                     testTag = "grant_overlay_button",
                     onAction = onRequestOverlayPermission
                 )
-                PermissionStatusRow(
-                    icon = Icons.Rounded.AccessibilityNew,
-                    title = "ตรวจจับหยุดเลื่อน (Accessibility - ตัวเลือกเสริม)",
-                    subtitle = if (uiState.permissions.hasAccessibilityPermission) "เปิดใช้งาน Auto-Scroll แล้ว" else "เปิดเพื่อแปลอัตโนมัติหลังหยุดเลื่อน",
-                    granted = uiState.permissions.hasAccessibilityPermission,
-                    actionLabel = if (uiState.permissions.hasAccessibilityPermission) null else "ตั้งค่า",
-                    testTag = "grant_accessibility_button",
-                    onAction = onRequestAccessibilityPermission
-                )
+                if (uiState.isAutoScrollSupported) {
+                    PermissionStatusRow(
+                        icon = Icons.Rounded.AccessibilityNew,
+                        title = "ตรวจจับหยุดเลื่อน (Accessibility - ตัวเลือกเสริม)",
+                        subtitle = if (uiState.permissions.hasAccessibilityPermission) "เปิดใช้งาน Auto-Scroll แล้ว" else "เปิดเพื่อแปลอัตโนมัติหลังหยุดเลื่อน",
+                        granted = uiState.permissions.hasAccessibilityPermission,
+                        actionLabel = if (uiState.permissions.hasAccessibilityPermission) null else "ตั้งค่า",
+                        testTag = "grant_accessibility_button",
+                        onAction = onRequestAccessibilityPermission
+                    )
+                } else {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(CharcoalElevated)
+                            .padding(horizontal = 12.dp, vertical = 10.dp)
+                            .testTag("manual_autoscroll_unavailable_row"),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.AccessibilityNew,
+                            contentDescription = null,
+                            tint = TextSecondary,
+                            modifier = Modifier.size(22.dp)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Auto-scroll ไม่พร้อมใช้งานใน Manual Edition",
+                                style = MaterialTheme.typography.titleSmall
+                            )
+                            Text(
+                                text = "รุ่น Manual ไม่ประกาศ Accessibility Service — ใช้การกดปุ่มลอยเพื่อแปลทันที",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = TextSecondary
+                            )
+                        }
+                    }
+                }
                 if (!uiState.permissions.hasNotificationPermission) {
                     PermissionStatusRow(
                         icon = Icons.Rounded.Notifications,

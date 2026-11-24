@@ -237,14 +237,28 @@ fun TranslatorScreen(
                     icon = Icons.Rounded.MenuBook
                 )
                 Text("โหมดการจับภาพ", style = MaterialTheme.typography.labelLarge, color = TextSecondary)
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    CaptureMode.entries.forEach { mode ->
-                        FilterChip(
-                            selected = settings.captureMode == mode,
-                            onClick = { onSelectCaptureMode(mode) },
-                            label = { Text(mode.displayThai) }
-                        )
+                if (uiState.isAutoScrollSupported) {
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        CaptureMode.entries.forEach { mode ->
+                            FilterChip(
+                                selected = settings.captureMode == mode,
+                                onClick = { onSelectCaptureMode(mode) },
+                                label = { Text(mode.displayThai) }
+                            )
+                        }
                     }
+                } else {
+                    FilterChip(
+                        selected = true,
+                        onClick = { onSelectCaptureMode(CaptureMode.MANUAL) },
+                        label = { Text(CaptureMode.MANUAL.displayThai) }
+                    )
+                    Text(
+                        text = "โหมด Auto-scroll ไม่พร้อมใช้งานใน Manual Edition — ใช้ปุ่มลอยหรือปุ่มจับภาพเพื่อแปลทันที",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextSecondary,
+                        modifier = Modifier.testTag("manual_autoscroll_unavailable_notice")
+                    )
                 }
 
                 Text("ลำดับช่องคำพูด (Manga / Manhwa)", style = MaterialTheme.typography.labelLarge, color = TextSecondary)
