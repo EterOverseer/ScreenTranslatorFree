@@ -1,0 +1,156 @@
+name: Build & Publish Prebuilt APK
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: "APK build variant"
+        required: true
+        default: "debug"
+        type: choice
+        options:
+          - debug
+          - release
+          - both
+      publish_release:
+        description: "Publish APK to GitHub Releases"
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-apk:
+    name: Test & Build EterScreen Translator APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.3.1"
+
+      - name: Restore optional Firebase configuration from secrets
+        env:
+          GOOGLE_SERVICES_JSON_B64: ${{ secrets.GOOGLE_SERVICES_JSON_B64 }}
+        run: |
+          if [ -n "$GOOGLE_SERVICES_JSON_B64" ]; then
+            echo "$GOOGLE_SERVICES_JSON_B64" | base64 --decode > app/google-services.json
+            echo "Restored app/google-services.json from repository secret."
+          else
+            echo "GOOGLE_SERVICES_JSON_B64 not set; building Offline-ready APK (MissingGoogleServicesStrategy.WARN)."
+          fi
+
+      - name: Ensure debug keystore exists
+        run: |
+          if [ ! -f debug.keystore ]; then
+            keytool -genkeypair -v \
+              -keystore debug.keystore \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+          fi
+
+      - name: Run unit and Robolectric tests
+        run: |
+          if [ -x ./gradlew ]; then
+            ./gradlew :app:testDebugUnitTest --stacktrace
+          else
+            gradle :app:testDebugUnitTest --stacktrace
+          fi
+
+      - name: Build Debug APK
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.build_type == 'debug' || inputs.build_type == 'both' }}
+        run: |
+          if [ -x ./gradlew ]; then
+            ./gradlew :app:assembleDebug --stacktrace
+          else
+            gradle :app:assembleDebug --stacktrace
+          fi
+          mkdir -p dist
+          cp app/build/outputs/apk/debug/app-debug.apk dist/EterScreen-Translator-debug.apk
+          (cd dist && sha256sum EterScreen-Translator-debug.apk > EterScreen-Translator-debug.apk.sha256)
+          ls -lh dist/EterScreen-Translator-debug.apk
+
+      - name: Build Release APK (optional when signing secrets exist)
+        if: ${{ (github.event_name == 'workflow_dispatch' && (inputs.build_type == 'release' || inputs.build_type == 'both')) || startsWith(github.ref, 'refs/tags/v') }}
+        env:
+          RELEASE_KEYSTORE_B64: ${{ secrets.RELEASE_KEYSTORE_B64 }}
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          if [ -z "$RELEASE_KEYSTORE_B64" ] || [ -z "$STORE_PASSWORD" ] || [ -z "$KEY_PASSWORD" ]; then
+            echo "Release signing secrets (RELEASE_KEYSTORE_B64, STORE_PASSWORD, KEY_PASSWORD) are not configured; skipping assembleRelease."
+            exit 0
+          fi
+          echo "$RELEASE_KEYSTORE_B64" | base64 --decode > my-upload-key.jks
+          export KEYSTORE_PATH="${{ github.workspace }}/my-upload-key.jks"
+          if [ -x ./gradlew ]; then
+            ./gradlew :app:assembleRelease --stacktrace
+          else
+            gradle :app:assembleRelease --stacktrace
+          fi
+          mkdir -p dist
+          cp app/build/outputs/apk/release/app-release.apk dist/EterScreen-Translator-release.apk
+          (cd dist && sha256sum EterScreen-Translator-release.apk > EterScreen-Translator-release.apk.sha256)
+          ls -lh dist/EterScreen-Translator-release.apk
+
+      - name: Clean up sensitive transient build files
+        if: always()
+        run: rm -f app/google-services.json my-upload-key.jks
+
+      - name: Upload test report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-report
+          path: app/build/reports/tests/testDebugUnitTest/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload prebuilt APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: EterScreen-Translator-APK
+          path: dist/*
+          retention-days: 30
+
+      - name: Publish prebuilt APK to GitHub Releases
+        if: ${{ github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish_release)) }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'latest-debug' }}
+          name: ${{ startsWith(github.ref, 'refs/tags/') && format('EterScreen Translator {0}', github.ref_name) || 'EterScreen Translator (Latest Prebuilt APK)' }}
+          prerelease: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+          generate_release_notes: ${{ startsWith(github.ref, 'refs/tags/v') }}
+          files: dist/*

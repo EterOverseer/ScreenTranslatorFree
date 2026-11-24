@@ -82,3 +82,16 @@
    ```
    ไฟล์ APK จะอยู่ที่ `app/build/outputs/apk/release/app-release.apk`
 
+---
+
+## GitHub Actions (สร้างและเผยแพร่ Prebuilt APK อัตโนมัติ)
+
+ไฟล์ Workflow อยู่ที่ `.github/workflows/build-apk.yml` โดยจะทำงานอัตโนมัติเมื่อมีการ Push ขึ้น Branch `main`, สร้าง Tag `v*`, เปิด Pull Request หรือกดสั่งรันผ่าน **Actions → Build & Publish Prebuilt APK → Run workflow**:
+
+- รัน `testDebugUnitTest` (Unit & Robolectric) และ `assembleDebug`
+- อัปโหลดไฟล์ `EterScreen-Translator-debug.apk` (+ `.sha256`) เป็น **Workflow Artifact**
+- เผยแพร่ Prebuilt APK ไปยัง **GitHub Releases** (อัปเดต Release `latest-debug` บน Branch `main` หรือ Release ตาม Tag `v*`)
+- **Repository Secrets (ตัวเลือกเสริม):**
+  - `GOOGLE_SERVICES_JSON_B64`: เนื้อหา `app/google-services.json` แบบ Base64 เพื่อเปิดใช้ Gemini AI ใน APK ที่บิลด์จาก CI (หากไม่ตั้งค่า แอปยังบิลด์ผ่านและใช้โหมดออฟไลน์ได้ตามปกติ)
+  - `RELEASE_KEYSTORE_B64`, `STORE_PASSWORD`, `KEY_PASSWORD`: สำหรับเซ็นชื่อ Release APK เมื่อรัน Tag `v*` หรือ `workflow_dispatch` แบบ `release` / `both`
+
