@@ -9,6 +9,7 @@ import com.example.domain.model.TranslationRequest
 import com.example.domain.model.TranslationResult
 import com.example.domain.repository.DiagnosticsRepository
 import com.google.firebase.Firebase
+import com.google.firebase.FirebaseApp
 import com.google.firebase.ai.ai
 import com.google.firebase.ai.type.Schema
 import com.google.firebase.ai.type.generationConfig
@@ -23,7 +24,11 @@ import org.json.JSONObject
 
 class GeminiTranslationEngine(
     private val diagnosticsRepository: DiagnosticsRepository,
-    private val customNoteProvider: () -> String = { "" }
+    private val customNoteProvider: () -> String = { "" },
+    private val firebaseReadyProvider: () -> Boolean = {
+        runCatching { FirebaseApp.getApps(com.google.firebase.FirebaseApp.getInstance().applicationContext).isNotEmpty() }
+            .getOrDefault(false)
+    }
 ) : TranslationEngine {
 
     override val providerType: TranslationProviderType = TranslationProviderType.GEMINI_AI
@@ -46,7 +51,7 @@ class GeminiTranslationEngine(
 
     private val model by lazy {
         Firebase.ai.generativeModel(
-            modelName = "gemini-3.8-flash",
+            modelName = MODEL_NAME,
             generationConfig = generationConfig {
                 responseMimeType = "application/json"
                 responseSchema = this@GeminiTranslationEngine.responseSchema
@@ -63,6 +68,18 @@ class GeminiTranslationEngine(
                     reason = TranslationFailureReason.EMPTY_INPUT,
                     userMessageThai = "ไม่พบข้อความสำหรับส่งให้ Gemini AI",
                     technicalDetails = "Empty source text"
+                )
+            }
+
+            if (!firebaseReadyProvider()) {
+                diagnosticsRepository.recordError(
+                    "GeminiTranslationEngine",
+                    "FirebaseApp unavailable (missing google-services.json or App Check configuration)"
+                )
+                return@withContext TranslationResult.Failure(
+                    reason = TranslationFailureReason.APP_CHECK_OR_SERVICE_UNAVAILABLE,
+                    userMessageThai = "ยังไม่ได้ตั้งค่า Firebase / App Check สำหรับ Gemini AI กรุณาตรวจสอบ google-services.json หรือใช้งานโหมดออฟไลน์",
+                    technicalDetails = "FirebaseApp not initialized"
                 )
             }
 
@@ -168,6 +185,13 @@ class GeminiTranslationEngine(
         diagnosticsRepository.recordError("GeminiTranslationEngine", "${e.javaClass.simpleName}: ${msg.take(120)}")
 
         return when {
+            e is IllegalStateException && ("firebaseapp" in lower || "not initialized" in lower) -> {
+                TranslationResult.Failure(
+                    reason = TranslationFailureReason.APP_CHECK_OR_SERVICE_UNAVAILABLE,
+                    userMessageThai = "ยังไม่ได้ตั้งค่า FirebaseApp สำหรับ Gemini AI — สามารถใช้โหมดออฟไลน์ได้ตามปกติ",
+                    technicalDetails = "IllegalStateException: FirebaseApp uninitialized"
+                )
+            }
             e is UnknownHostException || e is IOException || "network" in lower || "unable to resolve host" in lower -> {
                 TranslationResult.Failure(
                     reason = TranslationFailureReason.NETWORK_UNAVAILABLE,
@@ -201,5 +225,6 @@ class GeminiTranslationEngine(
 
     companion object {
         private const val TAG = "GeminiTranslationEngine"
+        const val MODEL_NAME = "gemini-3.8-flash"
     }
 }

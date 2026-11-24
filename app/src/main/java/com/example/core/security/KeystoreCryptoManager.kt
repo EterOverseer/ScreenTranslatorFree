@@ -5,64 +5,33 @@ import android.security.keystore.KeyProperties
 import android.util.Base64
 import android.util.Log
 import java.security.KeyStore
+import java.security.SecureRandom
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
-class KeystoreCryptoManager(
-    private val keyAlias: String = "eterscreen_config_aes_key"
-) {
-    private val transformation = "AES/GCM/NoPadding"
-    private val tagLengthBits = 128
-    private val ivSizeBytes = 12
+class KeystoreEncryptionException(message: String, cause: Throwable? = null) :
+    Exception(message, cause)
 
-    fun encrypt(plainText: String): String {
-        if (plainText.isEmpty()) return ""
+class KeystoreDecryptionException(message: String, cause: Throwable? = null) :
+    Exception(message, cause)
+
+interface SecretKeyProvider {
+    fun getOrCreateKey(): SecretKey
+    fun getExistingKey(): SecretKey?
+}
+
+class AndroidKeyStoreSecretKeyProvider(
+    private val keyAlias: String = DEFAULT_KEY_ALIAS
+) : SecretKeyProvider {
+
+    override fun getOrCreateKey(): SecretKey {
+        getExistingKey()?.let { return it }
         return try {
-            val secretKey = getOrCreateSecretKey() ?: return plainText
-            val cipher = Cipher.getInstance(transformation)
-            cipher.init(Cipher.ENCRYPT_MODE, secretKey)
-            val iv = cipher.iv
-            val encryptedBytes = cipher.doFinal(plainText.toByteArray(Charsets.UTF_8))
-            val combined = ByteArray(iv.size + encryptedBytes.size)
-            System.arraycopy(iv, 0, combined, 0, iv.size)
-            System.arraycopy(encryptedBytes, 0, combined, iv.size, encryptedBytes.size)
-            "enc:" + Base64.encodeToString(combined, Base64.NO_WRAP)
-        } catch (e: Exception) {
-            Log.w(TAG, "Keystore encryption unavailable; storing raw value", e)
-            plainText
-        }
-    }
-
-    fun decrypt(storedValue: String): String {
-        if (storedValue.isEmpty()) return ""
-        if (!storedValue.startsWith("enc:")) return storedValue
-        return try {
-            val payload = Base64.decode(storedValue.removePrefix("enc:"), Base64.NO_WRAP)
-            if (payload.size <= ivSizeBytes) return ""
-            val iv = payload.copyOfRange(0, ivSizeBytes)
-            val cipherText = payload.copyOfRange(ivSizeBytes, payload.size)
-            val secretKey = getOrCreateSecretKey() ?: return ""
-            val cipher = Cipher.getInstance(transformation)
-            cipher.init(Cipher.DECRYPT_MODE, secretKey, GCMParameterSpec(tagLengthBits, iv))
-            String(cipher.doFinal(cipherText), Charsets.UTF_8)
-        } catch (e: Exception) {
-            Log.w(TAG, "Keystore decryption failed", e)
-            ""
-        }
-    }
-
-    private fun getOrCreateSecretKey(): SecretKey? {
-        return try {
-            val keyStore = KeyStore.getInstance("AndroidKeyStore")
-            keyStore.load(null)
-            val existing = keyStore.getKey(keyAlias, null) as? SecretKey
-            if (existing != null) return existing
-
             val keyGenerator = KeyGenerator.getInstance(
                 KeyProperties.KEY_ALGORITHM_AES,
-                "AndroidKeyStore"
+                ANDROID_KEYSTORE
             )
             val spec = KeyGenParameterSpec.Builder(
                 keyAlias,
@@ -75,12 +44,122 @@ class KeystoreCryptoManager(
             keyGenerator.init(spec)
             keyGenerator.generateKey()
         } catch (e: Exception) {
-            Log.w(TAG, "AndroidKeyStore unavailable in current runtime", e)
+            throw KeystoreEncryptionException("Failed to provision Android Keystore secret key", e)
+        }
+    }
+
+    override fun getExistingKey(): SecretKey? {
+        return try {
+            val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE)
+            keyStore.load(null)
+            keyStore.getKey(keyAlias, null) as? SecretKey
+        } catch (e: Exception) {
+            Log.w(TAG, "Unable to query AndroidKeyStore: ${e.javaClass.simpleName}")
             null
         }
     }
 
     companion object {
+        private const val TAG = "KeystoreKeyProvider"
+        private const val ANDROID_KEYSTORE = "AndroidKeyStore"
+        const val DEFAULT_KEY_ALIAS = "eterscreen_config_aes_key"
+    }
+}
+
+class KeystoreCryptoManager(
+    private val keyProvider: SecretKeyProvider = AndroidKeyStoreSecretKeyProvider(),
+    private val cipherFactory: () -> Cipher = { Cipher.getInstance(TRANSFORMATION) },
+    private val secureRandom: SecureRandom = SecureRandom()
+) {
+    fun isEncryptedFormat(storedValue: String): Boolean {
+        return storedValue.startsWith(CIPHER_PREFIX)
+    }
+
+    /**
+     * Fail-closed AES-256-GCM encryption.
+     * Never returns plaintext on failure and never logs sensitive input.
+     */
+    @Throws(KeystoreEncryptionException::class)
+    fun encrypt(plainText: String): String {
+        if (plainText.isEmpty()) return ""
+        return try {
+            val secretKey = keyProvider.getOrCreateKey()
+            val cipher = cipherFactory()
+            cipher.init(Cipher.ENCRYPT_MODE, secretKey)
+            val iv = cipher.iv
+            if (iv == null || iv.size != IV_SIZE_BYTES) {
+                throw KeystoreEncryptionException("Invalid GCM IV generated by cipher")
+            }
+            val encryptedBytes = cipher.doFinal(plainText.toByteArray(Charsets.UTF_8))
+            val combined = ByteArray(iv.size + encryptedBytes.size)
+            System.arraycopy(iv, 0, combined, 0, iv.size)
+            System.arraycopy(encryptedBytes, 0, combined, iv.size, encryptedBytes.size)
+            CIPHER_PREFIX + Base64.encodeToString(combined, Base64.NO_WRAP)
+        } catch (e: KeystoreEncryptionException) {
+            Log.e(TAG, "Encryption failed: ${e.javaClass.simpleName}")
+            throw e
+        } catch (e: Exception) {
+            Log.e(TAG, "Encryption failed: ${e.javaClass.simpleName}")
+            throw KeystoreEncryptionException("Keystore encryption failed", e)
+        }
+    }
+
+    /**
+     * Fail-closed AES-256-GCM decryption.
+     * Rejects unencrypted/legacy values (missing "enc:" prefix), malformed payloads,
+     * missing keys, and tampered ciphertexts by throwing [KeystoreDecryptionException].
+     */
+    @Throws(KeystoreDecryptionException::class)
+    fun decrypt(storedValue: String): String {
+        if (storedValue.isEmpty()) return ""
+        if (!storedValue.startsWith(CIPHER_PREFIX)) {
+            throw KeystoreDecryptionException("Rejected unencrypted or legacy configuration value")
+        }
+        return try {
+            val encodedPayload = storedValue.removePrefix(CIPHER_PREFIX)
+            val payload = Base64.decode(encodedPayload, Base64.NO_WRAP)
+            if (payload.size <= IV_SIZE_BYTES + GCM_TAG_BYTES) {
+                throw KeystoreDecryptionException("Ciphertext payload is truncated or invalid")
+            }
+            val iv = payload.copyOfRange(0, IV_SIZE_BYTES)
+            val cipherText = payload.copyOfRange(IV_SIZE_BYTES, payload.size)
+            val secretKey = keyProvider.getExistingKey()
+                ?: throw KeystoreDecryptionException("Encryption key is missing or unavailable")
+            val cipher = cipherFactory()
+            cipher.init(Cipher.DECRYPT_MODE, secretKey, GCMParameterSpec(TAG_LENGTH_BITS, iv))
+            String(cipher.doFinal(cipherText), Charsets.UTF_8)
+        } catch (e: KeystoreDecryptionException) {
+            Log.w(TAG, "Decryption rejected: ${e.javaClass.simpleName}")
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "Decryption failed: ${e.javaClass.simpleName}")
+            throw KeystoreDecryptionException("Keystore decryption failed", e)
+        }
+    }
+
+    /**
+     * Safe migration helper for legacy unencrypted values.
+     * - Already encrypted values are verified via [decrypt] and kept intact.
+     * - Legacy plaintext values are immediately re-encrypted with fail-closed semantics.
+     *   If encryption fails, throws [KeystoreEncryptionException] without returning plaintext.
+     */
+    @Throws(KeystoreEncryptionException::class, KeystoreDecryptionException::class)
+    fun migrateLegacyValue(storedValue: String): String {
+        if (storedValue.isEmpty()) return ""
+        return if (isEncryptedFormat(storedValue)) {
+            decrypt(storedValue)
+            storedValue
+        } else {
+            encrypt(storedValue)
+        }
+    }
+
+    companion object {
         private const val TAG = "KeystoreCryptoManager"
+        const val TRANSFORMATION = "AES/GCM/NoPadding"
+        const val CIPHER_PREFIX = "enc:"
+        const val TAG_LENGTH_BITS = 128
+        const val GCM_TAG_BYTES = TAG_LENGTH_BITS / 8
+        const val IV_SIZE_BYTES = 12
     }
 }

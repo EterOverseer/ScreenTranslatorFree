@@ -284,9 +284,35 @@ fun HomeScreen(
                     value = when {
                         !settings.aiEnabled -> "ปิดใช้งาน (ออฟไลน์ล้วน)"
                         settings.translationMode == TranslationMode.OFFLINE -> "เปิดไว้ แต่ขณะนี้ใช้โหมดออฟไลน์"
-                        else -> "พร้อมใช้งานผ่าน App Check"
+                        else -> uiState.firebaseStatus.statusMessageThai
                     }
                 )
+                if (settings.aiEnabled &&
+                    settings.translationMode != TranslationMode.OFFLINE &&
+                    (!uiState.firebaseStatus.isFirebaseAppReady || !uiState.firebaseStatus.isAppCheckConfigured)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(StatusWarningContainer)
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.WarningAmber,
+                            contentDescription = null,
+                            tint = StatusWarning,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Text(
+                            text = "Gemini AI ยังไม่พร้อมใช้งานบนบิลด์นี้ หากไม่มี google-services.json หรือ App Check โหมดออฟไลน์ยังใช้งานได้ตามปกติ",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = StatusWarning
+                        )
+                    }
+                }
             }
 
             // Permissions Status Card

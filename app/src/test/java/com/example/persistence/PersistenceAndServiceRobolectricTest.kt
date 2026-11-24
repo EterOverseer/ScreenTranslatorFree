@@ -2,6 +2,7 @@ package com.example.persistence
 
 import android.content.Context
 import android.content.Intent
+import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.example.capture.ScreenCaptureManager
@@ -18,20 +19,31 @@ import com.example.domain.model.LanguageOption
 import com.example.domain.model.TranslationHistoryItem
 import com.example.domain.model.TranslationMode
 import com.example.domain.model.TranslationProviderType
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import java.io.File
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36])
 class PersistenceAndServiceRobolectricTest {
+
+    @Rule
+    @JvmField
+    val tempFolder = TemporaryFolder()
 
     @Test
     fun `room history persistence supports insert search filter delete and clearAll`() = runTest {
@@ -84,30 +96,39 @@ class PersistenceAndServiceRobolectricTest {
     @Test
     fun `datastore settings persistence saves and resets preferences`() = runTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
-        val dataStore = SettingsDataStore(context, KeystoreCryptoManager())
-        val repo = SettingsRepositoryImpl(dataStore)
+        val dsScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+        val rawDataStore = PreferenceDataStoreFactory.create(
+            scope = dsScope,
+            produceFile = { File(tempFolder.newFolder(), "settings_test.preferences_pb") }
+        )
+        try {
+            val dataStore = SettingsDataStore(context, KeystoreCryptoManager(), rawDataStore)
+            val repo = SettingsRepositoryImpl(dataStore)
 
-        repo.updateSettings {
-            it.copy(
-                sourceLanguage = LanguageOption.KOREAN,
-                translationMode = TranslationMode.OFFLINE,
-                autoCaptureDelayMs = 3500L,
-                aiEnabled = false,
-                bubbleOpacity = 0.65f
-            )
+            repo.updateSettings {
+                it.copy(
+                    sourceLanguage = LanguageOption.KOREAN,
+                    translationMode = TranslationMode.OFFLINE,
+                    autoCaptureDelayMs = 3500L,
+                    aiEnabled = false,
+                    bubbleOpacity = 0.65f
+                )
+            }
+
+            val saved = repo.settingsFlow.first()
+            assertEquals(LanguageOption.KOREAN, saved.sourceLanguage)
+            assertEquals(TranslationMode.OFFLINE, saved.translationMode)
+            assertEquals(3500L, saved.autoCaptureDelayMs)
+            assertFalse(saved.aiEnabled)
+
+            repo.resetSettings()
+            val reset = repo.settingsFlow.first()
+            assertEquals(TranslationMode.HYBRID, reset.translationMode)
+            assertEquals(1500L, reset.autoCaptureDelayMs)
+            assertTrue(reset.aiEnabled)
+        } finally {
+            dsScope.cancel()
         }
-
-        val saved = repo.settingsFlow.first()
-        assertEquals(LanguageOption.KOREAN, saved.sourceLanguage)
-        assertEquals(TranslationMode.OFFLINE, saved.translationMode)
-        assertEquals(3500L, saved.autoCaptureDelayMs)
-        assertFalse(saved.aiEnabled)
-
-        repo.resetSettings()
-        val reset = repo.settingsFlow.first()
-        assertEquals(TranslationMode.HYBRID, reset.translationMode)
-        assertEquals(1500L, reset.autoCaptureDelayMs)
-        assertTrue(reset.aiEnabled)
     }
 
     @Test

@@ -65,9 +65,10 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         // STEP 1: Configure Firebase App Check with launch Intent before any UI, ViewModels, or AI calls
-        configureAppCheck(this, intent)
+        val initialFirebaseStatus = configureAppCheck(this, intent)
 
         container = (application as EterScreenApplication).container
+        container.updateFirebaseStatus(initialFirebaseStatus)
         deepLinkTab = intent?.getStringExtra("navigate_to")
 
         enableEdgeToEdge()

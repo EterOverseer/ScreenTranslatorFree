@@ -274,7 +274,7 @@ class ScreenCaptureForegroundService : Service() {
         }
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_eterscreen_fg)
+            .setSmallIcon(R.drawable.ic_stat_eterscreen)
             .setContentTitle(getString(R.string.notif_capture_title))
             .setContentText(statusText)
             .setOngoing(true)

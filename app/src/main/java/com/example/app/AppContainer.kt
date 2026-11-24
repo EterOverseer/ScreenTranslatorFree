@@ -7,7 +7,9 @@ import com.example.capture.AutoCaptureScheduler
 import com.example.capture.ScreenCaptureManager
 import com.example.core.permissions.PermissionHelper
 import com.example.core.permissions.PermissionStatus
+import com.example.core.security.FirebaseConfigStatus
 import com.example.core.security.KeystoreCryptoManager
+import com.example.core.security.inspectFirebaseStatus
 import com.example.core.service.AutoScrollAccessibilityService
 import com.example.core.service.ScreenCaptureForegroundService
 import com.example.data.local.AppDatabase
@@ -65,7 +67,8 @@ class AppContainer(private val appContext: Context) {
     val geminiTranslationEngine: GeminiTranslationEngine by lazy {
         GeminiTranslationEngine(
             diagnosticsRepository = diagnosticsRepository,
-            customNoteProvider = { latestSettings.customMangaPromptNote }
+            customNoteProvider = { latestSettings.customMangaPromptNote },
+            firebaseReadyProvider = { firebaseStatus.value.isFirebaseAppReady }
         )
     }
     val translationRouter: TranslationRouter by lazy {
@@ -103,8 +106,12 @@ class AppContainer(private val appContext: Context) {
     private val _permissionStatus = MutableStateFlow(PermissionStatus())
     val permissionStatus: StateFlow<PermissionStatus> = _permissionStatus.asStateFlow()
 
+    private val _firebaseStatus = MutableStateFlow(inspectFirebaseStatus(appContext))
+    val firebaseStatus: StateFlow<FirebaseConfigStatus> = _firebaseStatus.asStateFlow()
+
     init {
         appScope.launch {
+            settingsDataStore.migrateLegacySecrets()
             settingsRepository.settingsFlow.collect { settings ->
                 latestSettings = settings
             }
@@ -123,6 +130,14 @@ class AppContainer(private val appContext: Context) {
         appScope.launch {
             offlineTranslationEngine.refreshModelStatuses()
         }
+    }
+
+    fun updateFirebaseStatus(status: FirebaseConfigStatus) {
+        _firebaseStatus.value = status
+    }
+
+    fun refreshFirebaseStatus() {
+        _firebaseStatus.value = inspectFirebaseStatus(appContext)
     }
 
     fun refreshPermissions() {

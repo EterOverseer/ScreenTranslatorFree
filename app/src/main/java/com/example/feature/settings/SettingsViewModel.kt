@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.app.AppContainer
+import com.example.core.security.KeystoreEncryptionException
 import com.example.domain.model.AppSettings
 import com.example.domain.model.CaptureMode
 import com.example.domain.model.HybridPriority
@@ -11,6 +12,7 @@ import com.example.domain.model.LanguageOption
 import com.example.domain.model.OfflineModelInfo
 import com.example.domain.model.ReadingDirection
 import com.example.domain.model.TranslationMode
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
@@ -19,16 +21,24 @@ import kotlinx.coroutines.launch
 
 data class SettingsUiState(
     val settings: AppSettings = AppSettings(),
-    val offlineModels: List<OfflineModelInfo> = emptyList()
+    val offlineModels: List<OfflineModelInfo> = emptyList(),
+    val cryptoErrorMessage: String? = null
 )
 
 class SettingsViewModel(private val container: AppContainer) : ViewModel() {
 
+    private val cryptoErrorFlow = MutableStateFlow<String?>(null)
+
     val uiState: StateFlow<SettingsUiState> = combine(
         container.settingsRepository.settingsFlow,
-        container.offlineTranslationEngine.modelsFlow
-    ) { settings, models ->
-        SettingsUiState(settings = settings, offlineModels = models)
+        container.offlineTranslationEngine.modelsFlow,
+        cryptoErrorFlow
+    ) { settings, models, cryptoError ->
+        SettingsUiState(
+            settings = settings,
+            offlineModels = models,
+            cryptoErrorMessage = cryptoError
+        )
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),
@@ -84,6 +94,7 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
 
     fun resetSettings() {
         viewModelScope.launch {
+            cryptoErrorFlow.value = null
             container.settingsRepository.resetSettings()
             container.translationRouter.clearCache()
             container.mangaContextProcessor.clearContext()
@@ -92,7 +103,17 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
 
     private fun update(transform: (AppSettings) -> AppSettings) {
         viewModelScope.launch {
-            container.settingsRepository.updateSettings(transform)
+            try {
+                cryptoErrorFlow.value = null
+                container.settingsRepository.updateSettings(transform)
+            } catch (e: KeystoreEncryptionException) {
+                container.diagnosticsRepository.recordError(
+                    "KeystoreCryptoManager",
+                    "Encryption unavailable; custom note was not stored"
+                )
+                cryptoErrorFlow.value =
+                    "ไม่สามารถเข้ารหัสข้อความแนะนำผ่าน Android Keystore ได้ ข้อมูลจึงไม่ถูกบันทึกเพื่อความปลอดภัย"
+            }
         }
     }
 

@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.app.AppContainer
 import com.example.core.permissions.PermissionStatus
+import com.example.core.security.FirebaseConfigStatus
 import com.example.domain.model.AppSettings
 import com.example.domain.model.OfflineModelInfo
 import com.example.domain.model.TranslatorState
@@ -19,6 +20,7 @@ data class HomeUiState(
     val translatorState: TranslatorState = TranslatorState(),
     val permissions: PermissionStatus = PermissionStatus(),
     val offlineModels: List<OfflineModelInfo> = emptyList(),
+    val firebaseStatus: FirebaseConfigStatus = FirebaseConfigStatus(),
     val showAiConsentDialog: Boolean = false
 )
 
@@ -28,13 +30,15 @@ class HomeViewModel(private val container: AppContainer) : ViewModel() {
         container.settingsRepository.settingsFlow,
         container.translateScreenUseCase.state,
         container.permissionStatus,
-        container.offlineTranslationEngine.modelsFlow
-    ) { settings, translator, permissions, models ->
+        container.offlineTranslationEngine.modelsFlow,
+        container.firebaseStatus
+    ) { settings, translator, permissions, models, firebaseStatus ->
         HomeUiState(
             settings = settings,
             translatorState = translator,
             permissions = permissions,
             offlineModels = models,
+            firebaseStatus = firebaseStatus,
             showAiConsentDialog = false
         )
     }.stateIn(
@@ -45,6 +49,7 @@ class HomeViewModel(private val container: AppContainer) : ViewModel() {
 
     fun refreshStatuses() {
         container.refreshPermissions()
+        container.refreshFirebaseStatus()
         viewModelScope.launch {
             container.offlineTranslationEngine.refreshModelStatuses()
         }

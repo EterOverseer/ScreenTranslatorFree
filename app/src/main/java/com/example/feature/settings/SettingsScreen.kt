@@ -190,6 +190,13 @@ fun SettingsScreen(
                         placeholder = { Text("เช่น เรียกตัวเอกว่า 'ท่านพี่', สำนวนแฟนตาซี") },
                         maxLines = 3
                     )
+                    uiState.cryptoErrorMessage?.let { errMsg ->
+                        Text(
+                            text = errMsg,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = StatusError
+                        )
+                    }
                 }
             }
 

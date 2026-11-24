@@ -6,6 +6,7 @@ import android.graphics.Bitmap
 import android.graphics.PixelFormat
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
+import android.media.Image
 import android.media.ImageReader
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
@@ -14,7 +15,9 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import android.view.WindowManager
+import com.example.core.image.BitmapUtils
 import com.example.domain.repository.DiagnosticsRepository
+import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -23,6 +26,30 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
+
+/**
+ * Lightweight frame abstraction enabling deterministic unit testing of the frame
+ * acquisition loop, Image closing, and Bitmap recycling lifecycle.
+ */
+internal interface CapturedImageHandle : AutoCloseable {
+    val width: Int
+    val height: Int
+    val pixelStride: Int
+    val rowStride: Int
+    val buffer: ByteBuffer?
+}
+
+private class AndroidImageHandle(private val image: Image) : CapturedImageHandle {
+    private val firstPlane: Image.Plane? = image.planes.firstOrNull()
+    override val width: Int get() = image.width
+    override val height: Int get() = image.height
+    override val pixelStride: Int get() = firstPlane?.pixelStride ?: 0
+    override val rowStride: Int get() = firstPlane?.rowStride ?: 0
+    override val buffer: ByteBuffer? get() = firstPlane?.buffer
+    override fun close() {
+        image.close()
+    }
+}
 
 class ScreenCaptureManager(
     private val context: Context,
@@ -102,66 +129,49 @@ class ScreenCaptureManager(
             return@withContext Result.failure(IllegalStateException("กำลังจับภาพหน้าจอรอบก่อนหน้าอยู่"))
         }
 
+        var acquiredBitmap: Bitmap? = null
         try {
             val reader = imageReader ?: return@withContext Result.failure(
                 IllegalStateException("ImageReader ไม่พร้อมใช้งาน")
             )
 
-            // Wait briefly for a fresh frame from VirtualDisplay
-            var acquiredBitmap: Bitmap? = null
-            repeat(6) { attempt ->
-                val image = reader.acquireLatestImage()
-                if (image != null) {
-                    try {
-                        val planes = image.planes
-                        if (planes.isNotEmpty()) {
-                            val buffer = planes[0].buffer
-                            val pixelStride = planes[0].pixelStride
-                            val rowStride = planes[0].rowStride
-                            val rowPadding = rowStride - pixelStride * image.width
-                            val paddedWidth = image.width + rowPadding / pixelStride.coerceAtLeast(1)
-
-                            val rawBitmap = Bitmap.createBitmap(
-                                paddedWidth.coerceAtLeast(image.width),
-                                image.height,
-                                Bitmap.Config.ARGB_8888
-                            )
-                            rawBitmap.copyPixelsFromBuffer(buffer)
-
-                            acquiredBitmap = if (rawBitmap.width != image.width) {
-                                val cropped = Bitmap.createBitmap(rawBitmap, 0, 0, image.width, image.height)
-                                rawBitmap.recycle()
-                                cropped
-                            } else {
-                                rawBitmap
-                            }
-                        }
-                    } finally {
-                        image.close()
-                    }
-                }
-                if (acquiredBitmap != null) return@repeat
-                if (attempt < 5) delay(75L)
-            }
+            acquiredBitmap = acquireValidBitmapWithRetry(
+                maxAttempts = MAX_FRAME_ATTEMPTS,
+                retryDelayMs = FRAME_RETRY_DELAY_MS,
+                acquireNextImage = {
+                    if (!_isSessionActive.value) null
+                    else reader.acquireLatestImage()?.let { AndroidImageHandle(it) }
+                },
+                isSessionActive = { _isSessionActive.value }
+            )
 
             val resultBitmap = acquiredBitmap
             if (resultBitmap == null) {
                 Result.failure(
                     IllegalStateException("ไม่สามารถอ่านภาพหน้าจอได้ (แอปปลายทางอาจเปิดการป้องกัน FLAG_SECURE)")
                 )
+            } else if (!_isSessionActive.value) {
+                BitmapUtils.safeRecycle(resultBitmap)
+                acquiredBitmap = null
+                Result.failure(IllegalStateException("เซสชันการจับภาพหน้าจอถูกปิดแล้ว"))
             } else if (isLikelyProtectedBlackFrame(resultBitmap)) {
-                resultBitmap.recycle()
+                BitmapUtils.safeRecycle(resultBitmap)
+                acquiredBitmap = null
                 Result.failure(
                     IllegalStateException("หน้าจอนี้ถูกป้องกันการจับภาพ (FLAG_SECURE)")
                 )
             } else {
+                // Transfer ownership to caller; prevent finally from recycling returned bitmap
+                acquiredBitmap = null
                 Result.success(resultBitmap)
             }
         } catch (e: CancellationException) {
+            BitmapUtils.safeRecycle(acquiredBitmap)
             throw e
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
+            BitmapUtils.safeRecycle(acquiredBitmap)
             diagnosticsRepository.recordError("ScreenCaptureManager", "Frame capture failed: ${e.javaClass.simpleName}")
-            Result.failure(e)
+            Result.failure(if (e is Exception) e else RuntimeException(e))
         } finally {
             isCapturingFrame.set(false)
         }
@@ -175,9 +185,10 @@ class ScreenCaptureManager(
         runCatching { imageReader?.setOnImageAvailableListener(null, null) }
         runCatching { imageReader?.close() }
         imageReader = null
-        runCatching { mediaProjection?.unregisterCallback(projectionCallback) }
-        runCatching { mediaProjection?.stop() }
+        val projection = mediaProjection
         mediaProjection = null
+        runCatching { projection?.unregisterCallback(projectionCallback) }
+        runCatching { projection?.stop() }
     }
 
     private fun updateDisplayMetrics() {
@@ -261,5 +272,93 @@ class ScreenCaptureManager(
 
     companion object {
         private const val TAG = "ScreenCaptureManager"
+        internal const val MAX_FRAME_ATTEMPTS = 6
+        internal const val FRAME_RETRY_DELAY_MS = 75L
+
+        /**
+         * Acquires a single valid Bitmap frame, stopping immediately on the first valid frame,
+         * recycling any replaced/temporary Bitmap, and closing every Image handle.
+         */
+        internal suspend fun acquireValidBitmapWithRetry(
+            maxAttempts: Int = MAX_FRAME_ATTEMPTS,
+            retryDelayMs: Long = FRAME_RETRY_DELAY_MS,
+            acquireNextImage: () -> CapturedImageHandle?,
+            isSessionActive: () -> Boolean = { true },
+            bitmapFactory: (Int, Int) -> Bitmap = { w, h ->
+                Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+            },
+            bitmapCropper: (Bitmap, Int, Int) -> Bitmap = { src, w, h ->
+                Bitmap.createBitmap(src, 0, 0, w, h)
+            }
+        ): Bitmap? {
+            var currentBitmap: Bitmap? = null
+            var attempt = 0
+            try {
+                while (attempt < maxAttempts && currentBitmap == null && isSessionActive()) {
+                    val handle = acquireNextImage()
+                    if (handle != null) {
+                        var candidate: Bitmap? = null
+                        try {
+                            candidate = convertImageToBitmap(handle, bitmapFactory, bitmapCropper)
+                        } finally {
+                            runCatching { handle.close() }
+                        }
+                        if (candidate != null) {
+                            BitmapUtils.safeRecycle(currentBitmap)
+                            currentBitmap = candidate
+                            break
+                        }
+                    }
+                    attempt++
+                    if (attempt < maxAttempts && isSessionActive()) {
+                        delay(retryDelayMs)
+                    }
+                }
+                val result = currentBitmap
+                currentBitmap = null
+                return result
+            } catch (t: Throwable) {
+                BitmapUtils.safeRecycle(currentBitmap)
+                throw t
+            }
+        }
+
+        internal fun convertImageToBitmap(
+            handle: CapturedImageHandle,
+            bitmapFactory: (Int, Int) -> Bitmap,
+            bitmapCropper: (Bitmap, Int, Int) -> Bitmap
+        ): Bitmap? {
+            val buffer = handle.buffer ?: return null
+            val width = handle.width
+            val height = handle.height
+            val pixelStride = handle.pixelStride
+            if (width <= 0 || height <= 0 || pixelStride <= 0) return null
+
+            val rowPadding = (handle.rowStride - pixelStride * width).coerceAtLeast(0)
+            val paddedWidth = width + rowPadding / pixelStride
+            var rawBitmap: Bitmap? = null
+            var croppedBitmap: Bitmap? = null
+            return try {
+                buffer.rewind()
+                rawBitmap = bitmapFactory(paddedWidth.coerceAtLeast(width), height)
+                rawBitmap.copyPixelsFromBuffer(buffer)
+                if (rawBitmap.width != width) {
+                    croppedBitmap = bitmapCropper(rawBitmap, width, height)
+                    BitmapUtils.safeRecycle(rawBitmap)
+                    rawBitmap = null
+                    val finalBmp = croppedBitmap
+                    croppedBitmap = null
+                    finalBmp
+                } else {
+                    val finalBmp = rawBitmap
+                    rawBitmap = null
+                    finalBmp
+                }
+            } catch (t: Throwable) {
+                BitmapUtils.safeRecycle(croppedBitmap)
+                BitmapUtils.safeRecycle(rawBitmap)
+                throw t
+            }
+        }
     }
 }
