@@ -19,6 +19,8 @@ import com.example.app.AppContainer
 import com.example.app.EterScreenApplication
 import com.example.core.edition.EditionConfig
 import com.example.core.overlay.FloatingOverlayManager
+import com.example.core.overlay.OverlayCaptureGuard
+import com.example.core.overlay.ReplacementOverlayManager
 import com.example.domain.model.AppSettings
 import com.example.domain.model.CaptureMode
 import com.example.domain.model.CaptureStatus
@@ -26,15 +28,18 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class ScreenCaptureForegroundService : Service() {
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private lateinit var container: AppContainer
     private lateinit var overlayManager: FloatingOverlayManager
+    private lateinit var replacementOverlayManager: ReplacementOverlayManager
     private var latestSettings = AppSettings()
     private var isPaused = false
 
@@ -42,6 +47,13 @@ class ScreenCaptureForegroundService : Service() {
         super.onCreate()
         container = (application as EterScreenApplication).container
         createNotificationChannel()
+
+        replacementOverlayManager = ReplacementOverlayManager(
+            context = this,
+            onRenderOutcome = { status, warning ->
+                container.translateScreenUseCase.updateOverlayRenderOutcome(status, warning)
+            }
+        )
 
         overlayManager = FloatingOverlayManager(
             context = this,
@@ -51,6 +63,7 @@ class ScreenCaptureForegroundService : Service() {
             onDisableOverlays = {
                 serviceScope.launch {
                     container.settingsRepository.updateSettings { it.copy(overlayEnabled = false) }
+                    replacementOverlayManager.hide()
                     overlayManager.hide()
                     container.translateScreenUseCase.updateOverlayShowing(false)
                 }
@@ -61,6 +74,29 @@ class ScreenCaptureForegroundService : Service() {
                 }
             },
             onOpenHistory = { /* Handled via PendingIntent / Activity launch inside overlay */ }
+        )
+
+        container.registerOverlayCaptureGuard(
+            object : OverlayCaptureGuard {
+                override suspend fun suspendForCapture() {
+                    val hidAny = withContext(Dispatchers.Main.immediate) {
+                        val hidReplacement = replacementOverlayManager.suspendForCapture()
+                        val hidFloating = overlayManager.suspendForCapture()
+                        hidReplacement || hidFloating
+                    }
+                    if (hidAny) {
+                        // Allow WindowManager/SurfaceFlinger 2 frames to composite without our overlays
+                        delay(45L)
+                    }
+                }
+
+                override suspend fun restoreAfterCapture() {
+                    withContext(Dispatchers.Main.immediate) {
+                        overlayManager.restoreAfterCapture()
+                        replacementOverlayManager.restoreAfterCapture()
+                    }
+                }
+            }
         )
 
         container.screenCaptureManager.onExternalStopListener = {
@@ -76,9 +112,13 @@ class ScreenCaptureForegroundService : Service() {
             }.collect { (settings, state) ->
                 latestSettings = settings
                 syncAutoCaptureScheduler(settings, state.captureStatus)
-                if (container.screenCaptureManager.isSessionActive.value) {
+                val sessionActive = container.screenCaptureManager.isSessionActive.value
+                if (sessionActive) {
                     overlayManager.update(settings, state)
+                    replacementOverlayManager.update(settings, state, true)
                     container.translateScreenUseCase.updateOverlayShowing(settings.overlayEnabled)
+                } else {
+                    replacementOverlayManager.update(settings, state, false)
                 }
             }
         }
@@ -107,7 +147,9 @@ class ScreenCaptureForegroundService : Service() {
                         serviceScope.launch {
                             val settings = container.settingsRepository.settingsFlow.first()
                             latestSettings = settings
-                            overlayManager.show(settings, container.translateScreenUseCase.state.value)
+                            val currentState = container.translateScreenUseCase.state.value
+                            overlayManager.show(settings, currentState)
+                            replacementOverlayManager.update(settings, currentState, true)
                             container.translateScreenUseCase.updateOverlayShowing(settings.overlayEnabled)
                         }
                     } else {
@@ -140,14 +182,17 @@ class ScreenCaptureForegroundService : Service() {
         super.onConfigurationChanged(newConfig)
         container.screenCaptureManager.handleConfigurationChange()
         overlayManager.handleScreenMetricsChange()
+        replacementOverlayManager.handleScreenMetricsChange()
     }
 
     override fun onDestroy() {
+        container.registerOverlayCaptureGuard(null)
         container.autoCaptureScheduler.cancelPending()
         container.autoCaptureScheduler.isEnabled = false
         container.translateScreenUseCase.cancelActiveTranslation()
         container.translateScreenUseCase.updateOverlayShowing(false)
         container.translateScreenUseCase.updateCaptureStatus(CaptureStatus.IDLE)
+        replacementOverlayManager.hide()
         overlayManager.hide()
         container.screenCaptureManager.onExternalStopListener = null
         container.screenCaptureManager.release()
@@ -204,6 +249,7 @@ class ScreenCaptureForegroundService : Service() {
         container.translateScreenUseCase.cancelActiveTranslation()
         container.translateScreenUseCase.updateOverlayShowing(false)
         container.translateScreenUseCase.updateCaptureStatus(CaptureStatus.IDLE)
+        replacementOverlayManager.hide()
         overlayManager.hide()
         container.screenCaptureManager.release()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {

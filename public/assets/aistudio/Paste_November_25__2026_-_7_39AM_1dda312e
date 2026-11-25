@@ -1,0 +1,867 @@
+# Feature Implementation: Replace Overlay + Adaptive Bubble Background
+
+You are modifying the existing Android application:
+
+**Project:** EterScreen Translator  
+**Repository:** https://github.com/EterOverseer/ScreenTranslatorFree  
+**Application ID (Manual):** `com.eteroverseer.screentranslator`  
+**Application ID (Full):** `com.eteroverseer.screentranslator.full`
+
+Latest known main commit when this task was prepared:
+
+`ae000d26be4ffef8ec886900a8ded085d34f8f24`
+
+IMPORTANT: Always inspect the actual current repository HEAD before editing. If newer commits exist, continue from the current HEAD. Do not revert previous work.
+
+This is an extension of the existing project. Do NOT recreate the application, replace its architecture, or remove existing functionality.
+
+---
+
+# 1. Main Objective
+
+Implement a real-time screen translation display mode called:
+
+**REPLACE + BUBBLE**
+
+The application must:
+
+1. Capture the screen through the existing MediaProjection implementation.
+2. Detect Japanese, Korean, and English text using the existing ML Kit OCR implementation.
+3. Keep the bounding box and stable ID of every detected MangaRegion.
+4. Translate each region while preserving its ID.
+5. Estimate the original speech-bubble background color from the captured image.
+6. Cover the original text with an adaptive rounded background patch.
+7. Render the translated Thai text over the corresponding original location.
+8. Display the resulting translation overlay above the original game or application.
+
+The feature must work in BOTH product flavors:
+
+- Manual Edition
+- Full Edition
+
+Auto-scroll must continue to work in Full Edition. Replace Overlay must NOT require Accessibility Service and must also work independently in Manual Edition.
+
+## Important distinction
+
+This implementation is an overlay-based replacement.
+
+It does NOT modify the original application's framebuffer, game assets, or source image.
+
+It hides the original detected text with a background-colored patch and draws Thai text on top.
+
+Do NOT describe this as complete AI inpainting or perfect image reconstruction.
+
+The first implementation should prioritize accurate text positioning, readable Thai typography, stable rendering, and reliable behavior.
+
+---
+
+# 2. Inspect Existing Architecture Before Coding
+
+Inspect the following files and their actual current implementations:
+
+- `app/src/main/java/com/example/domain/model/AppModels.kt`
+- `app/src/main/java/com/example/domain/model/TranslationModels.kt`
+- `app/src/main/java/com/example/manga/MangaContextProcessor.kt`
+- `app/src/main/java/com/example/ocr/MlKitOcrEngine.kt`
+- `app/src/main/java/com/example/domain/usecase/TranslateScreenUseCase.kt`
+- `app/src/main/java/com/example/translation/TranslationRouter.kt`
+- `app/src/main/java/com/example/translation/GeminiTranslationEngine.kt`
+- `app/src/main/java/com/example/translation/OfflineTranslationEngine.kt`
+- `app/src/main/java/com/example/core/overlay/FloatingOverlayManager.kt`
+- `app/src/main/java/com/example/core/service/ScreenCaptureForegroundService.kt`
+- `app/src/main/java/com/example/app/AppContainer.kt`
+- `app/src/main/java/com/example/data/preferences/SettingsDataStore.kt`
+- `app/src/main/java/com/example/feature/settings/SettingsScreen.kt`
+- `app/src/main/java/com/example/feature/settings/SettingsViewModel.kt`
+- `app/build.gradle.kts`
+- `.github/workflows/build-apk.yml`
+- `scripts/verify_flavor_manifests.py`
+
+Existing capabilities that must be reused:
+
+- `MangaContextProcessor.process()` already creates `MangaRegion` objects.
+- `MangaRegion` already contains `id`, `text`, `isSfx`, `isShortExpression`, and `OcrBoundingBox`.
+- `OcrResult` contains image width and height.
+- `AppSettings` already stores existing capture and overlay preferences.
+- `FloatingOverlayManager` already creates application overlay windows.
+- `TranslateScreenUseCase` currently flattens MangaRegion data into `batch.formattedText` before translating.
+- `TranslatorState` currently stores a single `lastTranslatedText`.
+- `TranslationRouter` currently translates a single `TranslationRequest`.
+- `SettingsDataStore` persists settings using DataStore Preferences.
+
+The most important data-flow problem to solve is that region IDs and bounding boxes are currently lost before translation output reaches the overlay.
+
+Do not solve this by guessing the positions from the returned Thai paragraph text.
+
+---
+
+# 3. Add Display Settings
+
+Introduce maintainable configuration enums.
+
+For example:
+
+```kotlin
+enum class TranslationDisplayMode {
+    PANEL,
+    REPLACE
+}
+
+enum class TranslationBackgroundTreatment {
+    BUBBLE
+}
+```
+
+Add appropriate settings to `AppSettings`:
+
+```kotlin
+translationDisplayMode
+translationBackgroundTreatment
+```
+
+Required initial defaults:
+
+- Display Mode: `REPLACE`
+- Background Treatment: `BUBBLE`
+
+Keep `PANEL` available as a fallback and alternative display mode.
+
+Persist these values in `SettingsDataStore`.
+
+Requirements:
+
+- Existing settings must remain readable.
+- Missing preference values must resolve safely to the new default.
+- Reset settings must restore the defined defaults.
+- Do not modify or break the existing encrypted custom prompt storage.
+- Do not introduce unnecessary database migrations.
+
+Update the Settings UI and ViewModel.
+
+Add a dedicated section:
+
+**Translation Display**
+
+Display Mode:
+- Panel
+- Replace
+
+Background Treatment:
+- Bubble
+
+Show Background Treatment only when Replace is selected.
+
+Provide clear Thai descriptions:
+
+- Panel: แสดงคำแปลในแผงควบคุมลอย
+- Replace: ปิดข้อความต้นฉบับและวางคำแปลทับตำแหน่งเดิม
+- Bubble: วิเคราะห์สีพื้นหลังและสร้างแผ่นปิดข้อความแบบบอลลูน
+
+Keep the existing floating control bubble and panel available for manual controls, source text, status, and history.
+
+Do not remove existing overlay controls.
+
+---
+
+# 4. Region-aware Translation Pipeline — Critical
+
+This is the core architectural requirement.
+
+Currently, the pipeline approximately does:
+
+`OCR -> MangaContextProcessor -> formattedText -> TranslationRouter -> lastTranslatedText`
+
+For Replace mode, implement a region-aware path:
+
+`OCR -> MangaContextProcessor -> MangaRegion[] -> Region Translation -> TranslatedRegion[] -> Replacement Overlay Renderer`
+
+Create appropriate domain models.
+
+For example:
+
+```kotlin
+data class TranslatedRegion(
+    val id: String,
+    val sourceText: String,
+    val translatedText: String,
+    val box: OcrBoundingBox,
+    val isSfx: Boolean,
+    val isShortExpression: Boolean,
+    val detectedLanguage: String,
+    val estimatedBackgroundArgb: Int,
+    val backgroundConfidence: Float
+)
+```
+
+You may adjust the exact model structure to fit the existing architecture.
+
+However, these properties must be preserved:
+
+- Stable region ID
+- Source text
+- Translated Thai text
+- Original OCR bounding box
+- Image coordinate dimensions
+- Background color estimate
+- Background confidence
+- Reading order
+
+Do not discard the original MangaRegion ordering.
+
+## Region Translation Requirements
+
+Implement region translation without relying on paragraph splitting or assuming output order.
+
+Each translated result must map explicitly to its original region ID.
+
+### Offline Translation
+
+Use the existing ML Kit offline translation engine.
+
+Translate each region independently or use an efficient batch implementation that reliably preserves the ID mapping.
+
+Prefer reusing a translator instance for the same language pair within one batch instead of repeatedly creating unnecessary translator instances.
+
+Preserve:
+
+- Thai language as the target language.
+- Existing model availability checks.
+- SFX handling.
+- Cancellation behavior.
+- Existing offline-only privacy behavior.
+
+### Gemini AI Translation
+
+Extend the Gemini translation pipeline to support structured region batches.
+
+Prefer a single Gemini request returning structured JSON:
+
+```json
+{
+  "regions": [
+    {
+      "id": "region_1",
+      "translatedText": "คำแปลภาษาไทย"
+    },
+    {
+      "id": "region_2",
+      "translatedText": "อีกหนึ่งคำแปล"
+    }
+  ]
+}
+```
+
+Use structured response schema support from the actual Firebase AI Logic SDK version already installed.
+
+Do not invent unsupported SDK methods.
+
+Pass the manga context, source language, reading direction, SFX hints, and custom glossary into the translation prompt.
+
+Strict output rules:
+
+- Every returned region must preserve its original ID.
+- Do not combine unrelated dialogue regions.
+- Do not invent missing speech.
+- Do not omit a region silently.
+- Do not rely on array order as the only mapping mechanism.
+- Reject unknown or duplicate IDs.
+- Reject blank translations.
+- Validate that the output IDs match the input IDs.
+
+If structured output is malformed, do not display guessed or incorrectly mapped replacements.
+
+### Hybrid Mode
+
+Respect the existing Hybrid Priority and AI Enabled settings.
+
+- OFFLINE_FIRST: try offline first; use Gemini as fallback only when AI is enabled and required.
+- GEMINI_PREFERRED: try Gemini first; use offline fallback when appropriate.
+- When AI is disabled, do not send any translation request over the network.
+
+Preserve existing TranslationRouter behavior and caching semantics.
+
+Avoid issuing one unnecessary Gemini request per speech bubble when a single validated batch request can handle the complete screen.
+
+### Preserve Existing Text Translation
+
+Do not break the normal text-only translation and manual retranslation features.
+
+For the ordinary Panel mode, preserve existing translation behavior.
+
+For Replace mode, use the region-aware output to produce the combined Thai text used by:
+
+- Existing floating panel.
+- Existing history.
+- Context memory.
+- Copy translation action.
+
+There should not be two independent translation pipelines producing conflicting results.
+
+---
+
+# 5. Bubble Background Treatment
+
+Implement an adaptive background estimator.
+
+The purpose is to hide Japanese/Korean text without always using a generic white rectangle.
+
+The estimator must use the captured OCR image before it is recycled.
+
+Important: OCR bounding boxes describe detected text, NOT the complete speech bubble.
+
+Do not assume the bounding box is the speech-bubble boundary.
+
+## Background estimation algorithm
+
+For each MangaRegion:
+
+1. Use its OCR bounding box in OCR-image coordinates.
+2. Sample pixels from a narrow border/ring around the detected text area.
+3. Prefer nearby pixels outside the detected glyphs.
+4. Use a robust median or histogram-based RGB estimator.
+5. Reduce the influence of dark text strokes, black outlines, isolated highlights, and extreme outliers.
+6. Estimate brightness and color confidence.
+7. Generate a patch color that matches the estimated bubble background as closely as reasonably possible.
+
+Support:
+
+- White speech bubbles.
+- Off-white / cream bubbles.
+- Gray bubbles.
+- Dark speech bubbles.
+- Black or dark comic backgrounds.
+- Colored speech bubbles.
+
+Avoid using white as a universal fallback.
+
+If the estimator cannot find a reliable background:
+
+- Use a conservative brightness-based fallback.
+- Set a low confidence value.
+- Do not cover a large unrelated area.
+- Allow the renderer to fall back to Panel for that particular region if rendering would be unsafe.
+
+Do not send screenshots to Gemini simply to sample background colors.
+
+Background estimation should happen locally on the device.
+
+## Patch geometry
+
+Create a rounded rectangular mask around the detected text.
+
+Use configurable internal padding.
+
+Requirements:
+
+- Preserve the original text region position.
+- Clip patches to the captured screen bounds.
+- Avoid excessive expansion into nearby panels.
+- Avoid covering adjacent MangaRegions.
+- Avoid overlapping unrelated speech bubbles.
+- Prefer conservative patch sizes.
+- Do not paint over unrelated artwork when no reliable bubble area can be inferred.
+
+A patch is a background-colored mask, not a reconstructed speech-bubble image.
+
+Do not attempt to remove the original speech-bubble outline or artwork.
+
+---
+
+# 6. Thai Text Rendering
+
+Implement a dedicated renderer for translated regions.
+
+Use an appropriate Android Canvas / View rendering approach or another architecture consistent with the existing project.
+
+The renderer must correctly display Thai Unicode text, including:
+
+- Thai vowels above and below consonants.
+- Tone marks.
+- Thai diacritics.
+- Multi-line text.
+- SFX translations.
+- Long dialogue.
+
+Use the existing bundled Thai font resources where suitable.
+
+Requirements:
+
+- Automatic line wrapping.
+- Text alignment suitable for manga speech bubbles.
+- Dynamic font sizing.
+- Minimum and maximum font size limits.
+- Adequate line spacing.
+- Sufficient internal padding.
+- Good contrast between text and background.
+- Readable results on both light and dark bubbles.
+
+Use Android text layout APIs that support Thai shaping correctly, such as `StaticLayout` or a suitable equivalent.
+
+Do not manually split Thai text by arbitrary character positions.
+
+## Text fitting
+
+For every region:
+
+1. Calculate the available patch width and height.
+2. Layout translated text.
+3. Reduce font size gradually when necessary.
+4. Try a conservative patch expansion within safe limits.
+5. Check collision against other replacement regions.
+6. If the text still cannot fit safely, do not obscure adjacent content.
+
+Provide a per-region fallback to the floating translation panel rather than drawing unreadable or overlapping text.
+
+Keep source text and translated text accessible through the existing panel.
+
+---
+
+# 7. Replacement Overlay Renderer
+
+Create a dedicated component where appropriate, such as:
+
+`ReplacementOverlayManager`
+
+It may integrate with `FloatingOverlayManager`, but keep responsibilities separated.
+
+The renderer must create a transparent full-screen overlay using the existing `SYSTEM_ALERT_WINDOW` permission.
+
+Use a non-interactive overlay window.
+
+Appropriate WindowManager flags may include:
+
+- `FLAG_NOT_FOCUSABLE`
+- `FLAG_NOT_TOUCHABLE`
+- `FLAG_LAYOUT_IN_SCREEN`
+
+Inspect actual Android behavior and choose the correct combination.
+
+Critical interaction requirement:
+
+**Touch events must pass through to the original game/application.**
+
+The replacement overlay must not intercept:
+
+- Taps
+- Swipes
+- Scrolls
+- Game controls
+- Text input
+
+Only the existing floating control bubble/panel should be interactive.
+
+The replacement layer should:
+
+- Use a transparent full-screen canvas.
+- Draw only translated region patches and text.
+- Update all regions atomically after a translation batch succeeds.
+- Remove obsolete patches when a new screen translation replaces them.
+- Clear patches when capture stops.
+- Clear or suspend patches when capture is paused, permissions are revoked, or the overlay is disabled.
+- Handle Activity/service lifecycle safely.
+- Release all views and resources on destruction.
+
+Do not create a separate WindowManager window for every translated word if one efficient full-screen drawing layer can handle the regions.
+
+## Coordinate mapping
+
+OCR boxes are in captured-image coordinates.
+
+The overlay uses screen/window coordinates.
+
+Implement a tested coordinate transformation.
+
+Account for:
+
+- Capture resolution scaling.
+- OCR downscaling.
+- Actual overlay view width and height.
+- Portrait and landscape rotation.
+- Display resizing.
+- Screen insets / system bars.
+- Bounds clipping.
+
+Do not assume 1 OCR pixel equals 1 physical screen pixel.
+
+Use captured image width/height as the source coordinate reference.
+
+Use the actual measured overlay dimensions for target coordinates.
+
+Provide a testable coordinate transformation class independent of Android View drawing where possible.
+
+On rotation or display resizing:
+
+- Clear stale overlay geometry.
+- Recalculate the coordinate mapping.
+- Wait for a valid new frame before rendering replacements.
+
+---
+
+# 8. Prevent Overlay Self-Capture and Feedback Loops
+
+This requirement is mandatory.
+
+The application must not capture its own Thai replacement overlay and then attempt to translate the Thai text again.
+
+Before every MediaProjection frame capture:
+
+- Temporarily hide the replacement overlay.
+- Temporarily hide the floating control bubble and expanded panel if they are visible.
+- Capture the original underlying screen.
+- Restore the application's overlay windows in a guaranteed `finally` path.
+
+Apply this to:
+
+- Manual capture.
+- Full Edition Auto-scroll capture.
+- Any other automatic capture route.
+
+Inspect the existing `AppContainer.autoCaptureScheduler` and capture service architecture so the guard is applied consistently.
+
+Avoid permanent overlay removal and recreation on every frame if visibility suspension can be implemented safely.
+
+Prevent stale replacement overlays from remaining over a newly scrolled page while waiting for new OCR/translation results.
+
+Do not use Accessibility to solve overlay self-capture.
+
+Do not introduce additional privileges.
+
+---
+
+# 9. Integration with Existing Pipeline
+
+Update the existing use case without removing existing behavior.
+
+For screen capture:
+
+1. Capture original screenshot.
+2. Compute screen hash.
+3. Run OCR.
+4. Create MangaContextBatch.
+5. Preserve each MangaRegion.
+6. Estimate background colors before recycling the OCR bitmap.
+7. Translate all regions.
+8. Construct validated TranslatedRegion results.
+9. Publish the result to TranslatorState.
+10. Render replacement patches atomically.
+11. Update existing combined Thai translation text.
+12. Save history once per screen capture, not once per region.
+
+Keep bitmap ownership and recycling correct.
+
+Do not hold full-resolution screenshots in memory longer than necessary.
+
+Store only the necessary overlay metadata, not full screenshots.
+
+Optional history image saving must remain governed by the existing user setting.
+
+## State model
+
+Extend `TranslatorState` appropriately.
+
+For example:
+
+- `translatedRegions`
+- `overlayRenderStatus`
+- `overlayWarning`
+
+Use immutable data classes and StateFlow updates.
+
+Ensure new state updates are thread-safe.
+
+If a new capture starts while an older translation is running:
+
+- Cancel or supersede the older job correctly.
+- Prevent stale region results from replacing the newer screen.
+- Do not allow a late response to display over the wrong page.
+
+Use a capture generation ID or equivalent stale-result protection.
+
+---
+
+# 10. Settings and UI
+
+Add a clear Settings section:
+
+**Display Mode**
+
+- Panel
+- Replace
+
+**Background Treatment**
+
+- Bubble
+
+Default configuration:
+
+- REPLACE
+- BUBBLE
+
+Allow switching back to Panel at any time.
+
+When Replace is selected:
+
+- Render translated regions over the captured screen.
+- Keep the floating control bubble available.
+- Keep the existing panel available for controls and viewing full translation.
+- Provide a clear indicator while replacement rendering is active.
+
+When Panel is selected:
+
+- Preserve the existing Panel behavior.
+- Hide replacement patches.
+
+If overlay permission is unavailable:
+
+- Show a clear Thai explanation.
+- Provide an action to open Android overlay permission settings.
+- Do not silently fail.
+- Do not crash.
+- Do not request Accessibility permission for Replace mode.
+
+Do not remove existing settings or redesign unrelated screens.
+
+---
+
+# 11. Both Manual and Full Editions
+
+The new feature must be part of shared application code.
+
+It must work in:
+
+### Manual Edition
+
+- Manual screen capture.
+- OCR.
+- Region-aware translation.
+- Replace Overlay.
+- Bubble Background Treatment.
+- No Accessibility Service declaration.
+
+### Full Edition
+
+All Manual Edition features, plus existing Auto-scroll functionality.
+
+Do not move Replace Overlay into the Full flavor only.
+
+Do not add Accessibility permissions to Manual Edition.
+
+Do not modify the existing product flavor application IDs.
+
+---
+
+# 12. Performance and Stability
+
+The feature must work on real Android hardware, including high-resolution displays such as RedMagic 11S Pro.
+
+Requirements:
+
+- Avoid unnecessary full-screen bitmap copies.
+- Sample a limited number of pixels per region.
+- Avoid allocating new Paint, Path, or layout objects on every frame.
+- Reuse drawing resources where appropriate.
+- Avoid creating one View per text character.
+- Avoid continuous redraw loops.
+- Use one efficient overlay drawing surface where practical.
+- Update the overlay only when translation results change.
+- Avoid leaking WindowManager views.
+- Handle Activity/service shutdown cleanly.
+- Handle failed translations without leaving incorrect patches.
+- Keep OCR and translation work off the main thread.
+- Render UI changes on the correct thread.
+
+Do not compromise MediaProjection security or the existing FLAG_SECURE handling.
+
+---
+
+# 13. Automated Tests — Mandatory
+
+Add unit tests for:
+
+### Region Translation Mapping
+
+- Correct ID-to-translation mapping.
+- Response regions returned in a different order.
+- Missing ID rejection.
+- Duplicate ID rejection.
+- Unknown ID rejection.
+- Blank translation rejection.
+- Partial translation failure.
+- Hybrid provider fallback.
+- AI disabled means no Gemini request.
+
+### Background Estimation
+
+- White bubble.
+- Cream bubble.
+- Dark bubble.
+- Gray bubble.
+- Colored bubble.
+- Black text and dark outline contamination.
+- Low-confidence sampling.
+- Out-of-bounds OCR region.
+- Very small region.
+
+### Coordinate Transformation
+
+- Same size capture and overlay.
+- Downscaled capture.
+- Portrait orientation.
+- Landscape orientation.
+- Display resize.
+- Clipping at all four screen edges.
+- Insets and offset behavior.
+
+### Rendering Layout
+
+- Short Thai dialogue.
+- Long Thai dialogue.
+- Multi-line Thai.
+- Thai vowels and tone marks.
+- Adjacent MangaRegions.
+- Overlapping patch candidates.
+- Text that cannot fit safely.
+
+### Settings
+
+- Default REPLACE mode.
+- Default BUBBLE treatment.
+- Existing stored settings remain readable.
+- Switch from Replace to Panel.
+- Switch back to Replace.
+- Reset settings behavior.
+
+### Edition Regression
+
+Run existing and new tests for BOTH flavors.
+
+Manual must still have no Accessibility Service declaration.
+
+Full must still contain the existing Accessibility Service.
+
+Do not weaken the existing manifest verification script.
+
+---
+
+# 14. CI and Build Verification
+
+Update the existing GitHub Actions workflow.
+
+Do not replace the existing CI pipeline unnecessarily.
+
+Required commands:
+
+```bash
+./gradlew :app:testManualDebugUnitTest
+./gradlew :app:testFullDebugUnitTest
+
+./gradlew :app:assembleManualDebug
+./gradlew :app:assembleFullDebug
+```
+
+Keep the existing merged-manifest and packaged-APK verification.
+
+Upload both APKs as separate artifacts:
+
+- `EterScreen-Translator-manual-debug`
+- `EterScreen-Translator-full-debug`
+
+Do NOT automatically publish a GitHub Release in this task.
+
+Do NOT overwrite existing Releases.
+
+The user will decide when to publish.
+
+---
+
+# 15. Physical Device Test Plan
+
+Document a manual test checklist for an actual Android device.
+
+Test the following:
+
+1. Install Manual Edition while Google Play Protect remains enabled.
+2. Grant Screen Capture permission.
+3. Grant Display over other apps permission.
+4. Open a Japanese manga or Korean manhwa reader.
+5. Start capture.
+6. Press the floating translate button.
+7. Verify each detected text region is covered with a background-colored bubble patch.
+8. Verify Thai translation appears at the correct location.
+9. Verify original application taps and scrolling still work.
+10. Scroll to a new page and verify old replacement patches disappear.
+11. Verify a new translation replaces the previous one.
+12. Pause and stop capture.
+13. Verify all replacement patches are removed when capture stops.
+14. Repeat with Full Edition and verify Auto-scroll still works.
+15. Test both bright and dark speech bubbles.
+
+Document known limitations:
+
+- Some text may be outside OCR-detected regions.
+- Bounding boxes may not cover an entire speech bubble.
+- Complex backgrounds and artwork cannot be perfectly restored by a simple mask.
+- Some applications use FLAG_SECURE and cannot be captured.
+- Overlay behavior can vary with Android version and device vendor.
+- Play Protect behavior must still be tested on the physical device.
+
+---
+
+# 16. Git and Delivery Rules
+
+Work from the latest repository HEAD.
+
+Inspect the working tree before editing.
+
+Do not overwrite unrelated user changes.
+
+Do not force push.
+
+Do not push directly to main unless the repository's current workflow and user authorization permit it.
+
+Do not create or publish a Release.
+
+After implementation:
+
+1. Run all relevant unit tests.
+2. Build both flavors.
+3. Verify both packaged manifests.
+4. Inspect the final Git diff.
+5. Report every modified file.
+6. Report exact test/build results.
+7. Report remaining limitations.
+8. Explain how to download both APK artifacts.
+9. Provide the exact Manual and Full APK output paths.
+
+Never fabricate successful build results.
+
+---
+
+# Final Acceptance Criteria
+
+The task is complete only when:
+
+- Replace mode works in Manual Edition.
+- Replace mode works in Full Edition.
+- Bubble background estimation works locally.
+- Thai text is mapped to the correct OCR region.
+- Region IDs are never guessed from paragraph order.
+- Overlay touches pass through to the original application.
+- Overlay self-capture feedback is prevented.
+- Existing Panel mode still works.
+- Existing Auto-scroll still works in Full Edition.
+- Manual Edition remains free of Accessibility Service declarations.
+- Both flavors pass tests and build successfully.
+- Both packaged manifests pass verification.
+
+**Implementation priority:**
+
+1. Correct region-to-translation mapping.
+2. Correct screen coordinate mapping.
+3. Accurate bubble background estimation.
+4. Readable Thai rendering.
+5. Overlay touch-through and self-capture prevention.
+6. Performance and lifecycle stability.
+7. UI polish.
+
+Do not claim the feature is complete until the tests and both APK builds have succeeded.

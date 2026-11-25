@@ -17,7 +17,9 @@ data class AppSettings(
     val bubbleX: Int = 24,
     val bubbleY: Int = 360,
     val saveHistoryImages: Boolean = false,
-    val customMangaPromptNote: String = ""
+    val customMangaPromptNote: String = "",
+    val translationDisplayMode: TranslationDisplayMode = TranslationDisplayMode.REPLACE,
+    val translationBackgroundTreatment: TranslationBackgroundTreatment = TranslationBackgroundTreatment.BUBBLE
 )
 
 data class TranslationHistoryItem(
@@ -60,5 +62,11 @@ data class TranslatorState(
     val isAutoScrollServiceConnected: Boolean = false,
     val isOverlayShowing: Boolean = false,
     val lastCaptureTimestamp: Long = 0L,
-    val lastSkippedReason: String? = null
+    val lastSkippedReason: String? = null,
+    val translatedRegions: List<TranslatedRegion> = emptyList(),
+    val sourceImageWidth: Int = 0,
+    val sourceImageHeight: Int = 0,
+    val overlayRenderStatus: OverlayRenderStatus = OverlayRenderStatus.IDLE,
+    val overlayWarning: String? = null,
+    val captureGenerationId: Long = 0L
 )

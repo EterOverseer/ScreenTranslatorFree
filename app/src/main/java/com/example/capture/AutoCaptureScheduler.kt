@@ -8,6 +8,7 @@ import kotlinx.coroutines.launch
 class AutoCaptureScheduler(
     private val scope: CoroutineScope,
     private val clockMillis: () -> Long = { System.currentTimeMillis() },
+    private val onScrollStarted: (() -> Unit)? = null,
     private val onTriggerCapture: suspend () -> Unit
 ) {
     private var debounceJob: Job? = null
@@ -24,6 +25,7 @@ class AutoCaptureScheduler(
 
     fun onScrollActivity() {
         if (!isEnabled) return
+        onScrollStarted?.invoke()
         debounceJob?.cancel()
         val waitMs = delayMillis.coerceIn(1000L, 5000L)
         debounceJob = scope.launch {

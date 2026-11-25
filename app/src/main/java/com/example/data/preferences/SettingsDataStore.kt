@@ -19,6 +19,8 @@ import com.example.domain.model.CaptureMode
 import com.example.domain.model.HybridPriority
 import com.example.domain.model.LanguageOption
 import com.example.domain.model.ReadingDirection
+import com.example.domain.model.TranslationBackgroundTreatment
+import com.example.domain.model.TranslationDisplayMode
 import com.example.domain.model.TranslationMode
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -50,6 +52,8 @@ class SettingsDataStore(
         val BUBBLE_Y = intPreferencesKey("bubble_y")
         val SAVE_HISTORY_IMAGES = booleanPreferencesKey("save_history_images")
         val ENCRYPTED_CUSTOM_PROMPT = stringPreferencesKey("encrypted_custom_manga_prompt")
+        val TRANSLATION_DISPLAY_MODE = stringPreferencesKey("translation_display_mode")
+        val TRANSLATION_BACKGROUND_TREATMENT = stringPreferencesKey("translation_background_treatment")
     }
 
     val settingsFlow: Flow<AppSettings> = dataStore.data.map { prefs ->
@@ -105,6 +109,8 @@ class SettingsDataStore(
             prefs[Keys.BUBBLE_Y] = updated.bubbleY
             prefs[Keys.SAVE_HISTORY_IMAGES] = updated.saveHistoryImages
             prefs[Keys.ENCRYPTED_CUSTOM_PROMPT] = encryptedNote
+            prefs[Keys.TRANSLATION_DISPLAY_MODE] = updated.translationDisplayMode.name
+            prefs[Keys.TRANSLATION_BACKGROUND_TREATMENT] = updated.translationBackgroundTreatment.name
         }
     }
 
@@ -142,7 +148,15 @@ class SettingsDataStore(
             bubbleX = prefs[Keys.BUBBLE_X] ?: 24,
             bubbleY = prefs[Keys.BUBBLE_Y] ?: 360,
             saveHistoryImages = prefs[Keys.SAVE_HISTORY_IMAGES] ?: false,
-            customMangaPromptNote = decryptedNote
+            customMangaPromptNote = decryptedNote,
+            translationDisplayMode = enumOrDefault(
+                prefs[Keys.TRANSLATION_DISPLAY_MODE],
+                TranslationDisplayMode.REPLACE
+            ),
+            translationBackgroundTreatment = enumOrDefault(
+                prefs[Keys.TRANSLATION_BACKGROUND_TREATMENT],
+                TranslationBackgroundTreatment.BUBBLE
+            )
         )
     }
 

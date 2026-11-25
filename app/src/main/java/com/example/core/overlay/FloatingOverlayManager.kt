@@ -28,6 +28,8 @@ import com.example.core.permissions.PermissionHelper
 import com.example.domain.model.AppSettings
 import com.example.domain.model.CaptureMode
 import com.example.domain.model.CaptureStatus
+import com.example.domain.model.OverlayRenderStatus
+import com.example.domain.model.TranslationDisplayMode
 import com.example.domain.model.TranslatorState
 import kotlin.math.abs
 
@@ -50,6 +52,7 @@ class FloatingOverlayManager(
     private var panelParams: WindowManager.LayoutParams? = null
 
     private var isExpanded = false
+    private var suspendedForCapture = false
     private var currentSettings = AppSettings()
     private var currentState = TranslatorState()
 
@@ -105,7 +108,38 @@ class FloatingOverlayManager(
         bubbleView?.let { runCatching { windowManager.updateViewLayout(it, params) } }
     }
 
+    fun suspendForCapture(): Boolean {
+        var hidAny = false
+        suspendedForCapture = true
+        bubbleView?.let {
+            if (it.visibility == View.VISIBLE) {
+                it.visibility = View.INVISIBLE
+                hidAny = true
+            }
+        }
+        panelView?.let {
+            if (it.visibility == View.VISIBLE) {
+                it.visibility = View.INVISIBLE
+                hidAny = true
+            }
+        }
+        return hidAny
+    }
+
+    fun restoreAfterCapture() {
+        suspendedForCapture = false
+        if (!currentSettings.overlayEnabled || !PermissionHelper.hasOverlayPermission(context)) {
+            hide()
+            return
+        }
+        bubbleView?.let { it.visibility = View.VISIBLE }
+        if (isExpanded) {
+            panelView?.let { it.visibility = View.VISIBLE }
+        }
+    }
+
     fun hide() {
+        suspendedForCapture = false
         collapsePanel()
         bubbleView?.let { runCatching { windowManager.removeView(it) } }
         bubbleView = null
@@ -453,11 +487,18 @@ class FloatingOverlayManager(
         val busy = currentState.isOcrRunning || currentState.isTranslating
         panelProgress?.visibility = if (busy) View.VISIBLE else View.GONE
 
+        val displayTag = if (currentSettings.translationDisplayMode == TranslationDisplayMode.REPLACE) {
+            " • Replace+Bubble"
+        } else {
+            " • Panel"
+        }
         val providerTag = currentState.activeProvider?.displayThai?.let { " • $it" }.orEmpty()
         panelStatusText?.text = when {
             currentState.isOcrRunning -> "กำลังอ่านข้อความจากหน้าจอ (OCR)..."
             currentState.isTranslating -> "กำลังแปลภาษา..."
-            else -> "${currentState.captureStatus.displayThai}$providerTag"
+            currentState.overlayRenderStatus == OverlayRenderStatus.ACTIVE_REPLACE ->
+                "วางคำแปลทับ ${currentState.translatedRegions.size} ตำแหน่ง$providerTag"
+            else -> "${currentState.captureStatus.displayThai}$displayTag$providerTag"
         }
 
         val autoText = when {
@@ -470,7 +511,7 @@ class FloatingOverlayManager(
 
         panelPauseBtn?.text = if (currentState.captureStatus == CaptureStatus.PAUSED) "ทำต่อ" else "พัก"
 
-        val err = currentState.lastErrorThai
+        val err = currentState.lastErrorThai ?: currentState.overlayWarning
         if (!err.isNullOrBlank()) {
             panelErrorText?.visibility = View.VISIBLE
             panelErrorText?.text = err
@@ -487,6 +528,10 @@ class FloatingOverlayManager(
         }
         panelSourceText?.text = currentState.lastOcrText.ifBlank {
             "ยังไม่มีข้อความ OCR"
+        }
+        if (suspendedForCapture) {
+            bubbleView?.visibility = View.INVISIBLE
+            panelView?.visibility = View.INVISIBLE
         }
     }
 

@@ -2,6 +2,9 @@ package com.example.translation
 
 import com.example.domain.model.LanguageOption
 import com.example.domain.model.OfflineModelInfo
+import com.example.domain.model.RegionTranslationItem
+import com.example.domain.model.RegionTranslationRequest
+import com.example.domain.model.RegionTranslationResult
 import com.example.domain.model.TranslationFailureReason
 import com.example.domain.model.TranslationProviderType
 import com.example.domain.model.TranslationRequest
@@ -13,9 +16,12 @@ import com.google.mlkit.nl.languageid.LanguageIdentification
 import com.google.mlkit.nl.translate.TranslateLanguage
 import com.google.mlkit.nl.translate.TranslateRemoteModel
 import com.google.mlkit.nl.translate.Translation
+import com.google.mlkit.nl.translate.Translator
 import com.google.mlkit.nl.translate.TranslatorOptions
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -226,6 +232,147 @@ class OfflineTranslationEngine(
                 )
             } finally {
                 runCatching { translator.close() }
+            }
+        }
+
+    override suspend fun translateRegions(request: RegionTranslationRequest): RegionTranslationResult =
+        withContext(Dispatchers.IO) {
+            if (request.regions.isEmpty()) {
+                return@withContext RegionTranslationResult.Failure(
+                    reason = TranslationFailureReason.EMPTY_INPUT,
+                    userMessageThai = "ไม่พบพื้นที่ข้อความสำหรับแปล",
+                    technicalDetails = "Empty region batch"
+                )
+            }
+
+            val resolvedTargetCode = TranslateLanguage.fromLanguageTag(request.targetLanguage.code)
+                ?: TranslateLanguage.THAI
+            val supportedLanguages = TranslateLanguage.getAllLanguages()
+            if (!supportedLanguages.contains(resolvedTargetCode)) {
+                return@withContext RegionTranslationResult.Failure(
+                    reason = TranslationFailureReason.LANGUAGE_PAIR_UNAVAILABLE,
+                    userMessageThai = "ไม่รองรับภาษาปลายทาง $resolvedTargetCode ในโหมดออฟไลน์",
+                    technicalDetails = "Unsupported target language $resolvedTargetCode"
+                )
+            }
+
+            val translators = mutableMapOf<String, Translator>()
+            val checkedPairs = mutableSetOf<String>()
+            val items = ArrayList<RegionTranslationItem>(request.regions.size)
+            val detectedCounts = mutableMapOf<String, Int>()
+
+            try {
+                for (region in request.regions) {
+                    currentCoroutineContext().ensureActive()
+                    val cleanText = region.text.trim()
+                    if (cleanText.isEmpty()) {
+                        return@withContext RegionTranslationResult.Failure(
+                            reason = TranslationFailureReason.EMPTY_INPUT,
+                            userMessageThai = "พบพื้นที่ข้อความว่างในชุดคำแปล",
+                            technicalDetails = "Blank input in region ${region.id}"
+                        )
+                    }
+
+                    val sourceCode = resolveSourceLanguageCode(cleanText, request.sourceLanguage)
+                    if (sourceCode == null || sourceCode == "und") {
+                        return@withContext RegionTranslationResult.Failure(
+                            reason = TranslationFailureReason.LANGUAGE_PAIR_UNAVAILABLE,
+                            userMessageThai = "ไม่สามารถระบุภาษาต้นฉบับในตำแหน่ง ${region.id} สำหรับโหมดออฟไลน์",
+                            technicalDetails = "Unidentified source language for ${region.id}"
+                        )
+                    }
+
+                    detectedCounts[sourceCode] = (detectedCounts[sourceCode] ?: 0) + 1
+                    val mlKitSource = TranslateLanguage.fromLanguageTag(sourceCode)
+                    if (mlKitSource == null || !supportedLanguages.contains(mlKitSource)) {
+                        return@withContext RegionTranslationResult.Failure(
+                            reason = TranslationFailureReason.LANGUAGE_PAIR_UNAVAILABLE,
+                            userMessageThai = "คู่ภาษา $sourceCode → $resolvedTargetCode ไม่รองรับในโหมดออฟไลน์",
+                            technicalDetails = "Unsupported ML Kit source $sourceCode"
+                        )
+                    }
+
+                    if (mlKitSource == resolvedTargetCode) {
+                        items.add(RegionTranslationItem(region.id, cleanText))
+                        continue
+                    }
+
+                    if (checkedPairs.add(mlKitSource)) {
+                        val sourceModel = TranslateRemoteModel.Builder(mlKitSource).build()
+                        val targetModel = TranslateRemoteModel.Builder(resolvedTargetCode).build()
+                        val sourceReady = runCatching { modelManager.isModelDownloaded(sourceModel).await() }.getOrDefault(false)
+                        val targetReady = runCatching { modelManager.isModelDownloaded(targetModel).await() }.getOrDefault(false)
+                        if (!sourceReady || !targetReady) {
+                            val missing = buildList {
+                                if (!sourceReady) add(mlKitSource.uppercase())
+                                if (!targetReady) add(resolvedTargetCode.uppercase())
+                            }.joinToString(", ")
+                            return@withContext RegionTranslationResult.Failure(
+                                reason = TranslationFailureReason.OFFLINE_MODEL_NOT_DOWNLOADED,
+                                userMessageThai = "ยังไม่ได้ดาวน์โหลดโมเดลออฟไลน์ ($missing) กรุณาดาวน์โหลดในหน้าตั้งค่า",
+                                technicalDetails = "Missing offline ML Kit models: $missing"
+                            )
+                        }
+                    }
+
+                    val translator = translators.getOrPut(mlKitSource) {
+                        val options = TranslatorOptions.Builder()
+                            .setSourceLanguage(mlKitSource)
+                            .setTargetLanguage(resolvedTargetCode)
+                            .build()
+                        Translation.getClient(options)
+                    }
+
+                    val sfxBody = cleanText.removePrefix("[SFX]").trim()
+                    val translated = translator.translate(if (region.isSfx && sfxBody.isNotEmpty()) sfxBody else cleanText)
+                        .await()
+                        .trim()
+
+                    if (translated.isEmpty()) {
+                        return@withContext RegionTranslationResult.Failure(
+                            reason = TranslationFailureReason.UNKNOWN,
+                            userMessageThai = "ระบบแปลออฟไลน์ไม่คืนค่าข้อความในตำแหน่ง ${region.id}",
+                            technicalDetails = "Blank ML Kit translation for ${region.id}"
+                        )
+                    }
+                    items.add(RegionTranslationItem(region.id, translated))
+                }
+
+                val primaryLanguage = detectedCounts.maxByOrNull { it.value }?.key ?: request.sourceLanguage.code
+                when (val validation = RegionBatchValidator.validateItems(
+                    expectedInputs = request.regions,
+                    returnedItems = items,
+                    detectedLanguage = primaryLanguage,
+                    note = "แปลด้วยโมเดลออฟไลน์บนเครื่อง (ML Kit)"
+                )) {
+                    is RegionBatchValidationResult.Valid -> RegionTranslationResult.Success(
+                        translationsById = validation.translationsById,
+                        provider = TranslationProviderType.OFFLINE_MLKIT,
+                        detectedLanguage = validation.detectedLanguage ?: primaryLanguage,
+                        note = validation.note
+                    )
+                    is RegionBatchValidationResult.Invalid -> RegionTranslationResult.Failure(
+                        reason = validation.reason,
+                        userMessageThai = validation.userMessageThai,
+                        technicalDetails = validation.technicalDetails
+                    )
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                diagnosticsRepository.recordError(
+                    "OfflineTranslationEngine",
+                    "Batch: ${e.javaClass.simpleName}: ${e.message ?: "error"}"
+                )
+                RegionTranslationResult.Failure(
+                    reason = TranslationFailureReason.UNKNOWN,
+                    userMessageThai = "แปลออฟไลน์ไม่สำเร็จ: ${e.localizedMessage ?: "ข้อผิดพลาดไม่ทราบสาเหตุ"}",
+                    technicalDetails = e.message ?: "Offline batch translate exception"
+                )
+            } finally {
+                translators.values.forEach { translator ->
+                    runCatching { translator.close() }
+                }
             }
         }
 

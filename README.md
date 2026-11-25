@@ -39,16 +39,24 @@
    - จัดกลุ่มกล่องข้อความตามบอลลูนคำพูด ไม่รวมข้อความข้ามพาเนล
    - เรียงลำดับอ่านแบบ **ขวาไปซ้าย (RTL)** สำหรับมังงะญี่ปุ่น และ **บนลงล่าง/ซ้ายไปขวา (LTR)** สำหรับมันฮวาเกาหลี
 
+5. **โหมดแสดงคำแปลแบบ Replace + Bubble (ค่าเริ่มต้น) และ Panel Mode**
+   - **Replace + Bubble (`TranslationDisplayMode.REPLACE` + `TranslationBackgroundTreatment.BUBBLE`)**: วางแผ่นพื้นหลังสีเดียวกับช่องคำพูดและคำแปลภาษาไทยทับลงบนตำแหน่งข้อความต้นฉบับโดยตรง ใช้งานได้ทั้งใน **Manual Edition** และ **Full Edition**
+   - **Region-Aware Translation**: ส่งชุดข้อความแยกตาม `MangaRegion.id` ผ่าน Offline ML Kit (ใช้ `Translator` ซ้ำต่อคู่ภาษา) หรือ Gemini AI (`gemini-3.8-flash` แบบ Structured JSON Batch) และตรวจสอบ ID ครบถ้วนก่อนแสดงผล ไม่เดาการจับคู่จากลำดับย่อหน้า
+   - **Local Bubble Background Estimation (`BubbleBackgroundEstimator`)**: สุ่มพิกเซลรอบขอบกล่องข้อความก่อนรีไซเคิล Bitmap กรองเส้นขอบดำ/ตัวอักษรออก หาคลัสเตอร์สีหลัก และเลือกสีข้อความไทยที่มีความเปรียบต่างสูง (ไม่ส่งภาพหน้าจอไปให้ Gemini)
+   - **Coordinate Transformation & Thai Rendering (`OverlayCoordinateMapper` + `ReplacementRegionLayouter`)**: แปลงพิกัดภาพเป็นพิกัดหน้าจอรองรับการย่อขยาย การหมุนจอ และขอบระบบ จัดวางคำไทยด้วย `StaticLayout` + ฟอนต์ `noto_sans_thai` ปรับขนาดอัตโนมัติ หลีกเลี่ยงการทับซ้อน และส่งกลับ Panel เฉพาะช่องที่ไม่สามารถวางได้อย่างปลอดภัย
+   - **Touch-Through & Self-Capture Guard (`ReplacementOverlayManager` + `OverlayCaptureGuard`)**: ใช้หน้าต่าง Overlay เต็มจอแบบไม่รับโฟกัส/ไม่รับสัมผัส (`FLAG_NOT_FOCUSABLE | FLAG_NOT_TOUCHABLE | FLAG_LAYOUT_IN_SCREEN`) เพื่อให้แตะ/เลื่อนแอปมังงะได้ตามปกติ พร้อมซ่อนทั้ง Replace Overlay และ Floating Bubble/Panel ชั่วคราวก่อนจับภาพ `MediaProjection` ทุกครั้ง (ทั้ง Manual และ Auto-scroll) และคืนค่าใน `finally` เสมอ
+   - **Panel Mode**: ยังคงสลับกลับมาใช้โหมดหน้าต่างคำแปลรวมได้ตลอดเวลาในหน้า **ตั้งค่า → การแสดงผลคำแปล**
+
 ---
 
 ## สิทธิ์ที่แต่ละรุ่นใช้งาน
 
 ### Manual Edition (`com.eteroverseer.screentranslator`)
 - **`FOREGROUND_SERVICE` / `FOREGROUND_SERVICE_MEDIA_PROJECTION`**: สำหรับจับภาพหน้าจอเมื่อผู้ใช้กดอนุญาต
-- **`SYSTEM_ALERT_WINDOW`**: สำหรับแสดงปุ่มลอยและหน้าต่างคำแปลทับแอปอื่น (`WindowManager`)
+- **`SYSTEM_ALERT_WINDOW`**: สำหรับแสดงปุ่มลอย หน้าต่างคำแปล และ Replace Overlay ทับแอปอื่น (`WindowManager`)
 - **`POST_NOTIFICATIONS`** *(Android 13+)*: สำหรับแสดงการแจ้งเตือนสถานะจับภาพและปุ่มหยุดด่วน
 - **`INTERNET` / `ACCESS_NETWORK_STATE`**: สำหรับดาวน์โหลดโมเดล ML Kit และเรียก Gemini AI (เมื่อผู้ใช้เปิดใช้งาน)
-- *(ไม่มี `AutoScrollAccessibilityService` และไม่มี `BIND_ACCESSIBILITY_SERVICE` ใน Manifest)*
+- *(ไม่มี `AutoScrollAccessibilityService` และไม่มี `BIND_ACCESSIBILITY_SERVICE` ใน Manifest; โหมด Replace ไม่ขอสิทธิ์ Accessibility)*
 
 ### Full Edition (`com.eteroverseer.screentranslator.full`)
 - ใช้สิทธิ์ทั้งหมดข้างต้น **ร่วมกับ**
@@ -60,8 +68,9 @@
 
 ### การใช้งาน Manual Capture (ใช้ได้ทั้ง Manual และ Full Edition)
 1. เปิดแอปแล้วอนุญาตสิทธิ์ **หน้าต่างลอย (Overlay)** และการแจ้งเตือน (หากระบบถาม)
-2. กดปุ่ม **เริ่มแปลหน้าจอ** และยืนยันสิทธิ์จับภาพหน้าจอ **MediaProjection**
-3. เปิดแอปมังงะหรือแอปที่ต้องการแปล แล้วแตะ **ปุ่มลอย** (หรือกดปุ่ม **จับภาพและแปลทันที** ในหน้าควบคุม) เพื่อจับภาพหน้าจอปัจจุบันและแปลเป็นภาษาไทยทันที
+2. ตรวจสอบในหน้า **ตั้งค่า → การแสดงผลคำแปล (Translation Display)** ว่าเลือก **Replace** + **Bubble** (ค่าเริ่มต้น) หรือสลับเป็น **Panel** ได้ทุกเมื่อ
+3. กดปุ่ม **เริ่มแปลหน้าจอ** และยืนยันสิทธิ์จับภาพหน้าจอ **MediaProjection**
+4. เปิดแอปมังงะหรือแอปที่ต้องการแปล แล้วแตะ **ปุ่มลอย** (หรือกดปุ่ม **จับภาพและแปลทันที** ในหน้าควบคุม) เพื่อจับภาพหน้าจอปัจจุบันและวางคำแปลภาษาไทยทับตำแหน่งเดิมทันที (หรืออ่านฉบับเต็มใน Panel)
 
 ### การตั้งค่า Auto-scroll (เฉพาะ Full Edition)
 1. ติดตั้งรุ่น **Full Edition** (`EterScreen Translator Full`)
@@ -131,6 +140,40 @@ Workflow อยู่ที่ `.github/workflows/build-apk.yml` โดยทำ
 - รัน `:app:testManualDebugUnitTest` และ `:app:testFullDebugUnitTest` พร้อมอัปโหลดรายงานทดสอบแยกทั้ง 2 รุ่น
 - สร้างทั้ง **Manual Debug APK** และ **Full Debug APK**
 - รัน `scripts/verify_flavor_manifests.py` ตรวจยืนยันทั้ง Merged Manifest และ Packaged APK (CI จะล้มเหลวทันทีหากรุ่น Manual มี Accessibility Service หรือรุ่น Full ขาด Service)
-- อัปโหลด **Manual APK** (`EterScreen-Translator-manual-debug`) เป็น Artifact หลัก และอัปโหลด **Full APK** (`EterScreen-Translator-full-debug`) แยกต่างหากชัดเจน
-- เผยแพร่ APK ทั้ง 2 รุ่น (พร้อม `.sha256`) ไปยัง **GitHub Releases** อัตโนมัติเมื่อ push เข้า `main` (แท็ก `latest-editions-debug` พร้อมตั้งเป็น Latest), เมื่อ push tag `v*`, หรือเมื่อสั่งรันผ่าน `workflow_dispatch` (ค่าเริ่มต้น `publish_release = true`)
+- อัปโหลด **Manual APK** (`EterScreen-Translator-manual-debug`) และ **Full APK** (`EterScreen-Translator-full-debug`) เป็น GitHub Actions Artifacts แยกกันทุกครั้งที่รัน workflow
+- ไม่เผยแพร่ GitHub Release อัตโนมัติเมื่อ push เข้า `main` — จะเผยแพร่ Release เฉพาะเมื่อ push tag `v*` หรือสั่งรันผ่าน `workflow_dispatch` พร้อมตั้งค่า `publish_release = true`
 - **Repository Secrets (ตัวเลือกเสริม):** `GOOGLE_SERVICES_JSON_B64` สำหรับใส่ `app/google-services.json` ใน CI (หากไม่กำหนด แอปยังบิลด์ผ่านและใช้โหมดออฟไลน์ได้ตามปกติ)
+
+---
+
+## แผนการทดสอบบนอุปกรณ์จริง (Physical Device Test Plan)
+
+ตรวจสอบขั้นตอนต่อไปนี้บนอุปกรณ์จริง (เช่น RedMagic 11S Pro หรือเครื่องทดสอบ Android 8.0+):
+
+1. ติดตั้ง **Manual Edition** (`EterScreen-Translator-manual-debug.apk`) ขณะที่ **Google Play Protect ยังเปิดอยู่** เพื่อตรวจพฤติกรรมการติดตั้งจริง
+2. อนุญาตสิทธิ์ **Screen Capture (MediaProjection)** เมื่อเริ่มเซสชันแปล
+3. อนุญาตสิทธิ์ **Display over other apps (`SYSTEM_ALERT_WINDOW`)**
+4. เปิดแอปอ่านมังงะญี่ปุ่นหรือมันฮวาเกาหลี
+5. กด **เริ่มแปลหน้าจอ** ใน EterScreen Translator (ตรวจสอบว่าเลือกโหมด **Replace + Bubble** อยู่)
+6. แตะ **ปุ่มลอย** เพื่อสั่งจับภาพและแปลหน้าปัจจุบัน
+7. ตรวจสอบว่าทุกบริเวณข้อความที่ตรวจพบมีแผ่นสีพื้นหลังใกล้เคียงสีบอลลูนเดิมปิดทับ
+8. ตรวจสอบว่าคำแปลภาษาไทยแสดงตรงตำแหน่งที่เหมาะสม อ่านง่าย สระและวรรณยุกต์ไม่ขาด
+9. ตรวจสอบว่ายังแตะ ปัด และเลื่อนหน้าในแอปมังงะเดิมได้ตามปกติ (Touch-through)
+10. เลื่อนไปยังหน้าถัดไปและตรวจสอบว่าแผ่นคำแปลเก่าถูกลบ/ซ่อนออก ไม่ค้างทับหน้าใหม่
+11. ตรวจสอบว่าการแปลรอบใหม่แทนที่แผ่นคำแปลรอบเดิมอย่างสะอาดไม่ซ้อนทับ
+12. กด **พักการจับภาพ (Pause)** และ **หยุดการจับภาพ (Stop)**
+13. ตรวจสอบว่าแผ่นคำแปลทับทั้งหมดถูกลบออกจากหน้าจอทันทีเมื่อหยุดการจับภาพ
+14. ทดสอบซ้ำกับ **Full Edition** (`EterScreen-Translator-full-debug.apk`) และยืนยันว่า **Auto-scroll** ยังทำงานได้ตามปกติโดยไม่จับภาพทับคำแปลตัวเอง
+15. ทดสอบกับทั้ง **บอลลูนสีสว่าง (ขาว/ครีม)** และ **บอลลูนสีเข้ม/ดำ** เพื่อยืนยันความเปรียบต่างของสีตัวอักษรไทย
+
+---
+
+## ข้อจำกัดที่ทราบ (Known Limitations)
+
+- ข้อความบางส่วนที่มีลวดลายมาก เอียง หรือความละเอียดต่ำอาจอยู่นอกเหนือพื้นที่ที่ ML Kit OCR ตรวจจับได้
+- กรอบสี่เหลี่ยม OCR อาจไม่ครอบคลุมรูปทรงโค้งของบอลลูนคำพูดทั้งหมด
+- พื้นหลังที่เป็นภาพวาดซับซ้อน ไล่เฉดสี หรือไม่มีกรอบบอลลูนชัดเจน ไม่สามารถลบ/ฟื้นฟูภาพพื้นหลังเดิมได้สมบูรณ์ด้วยแผ่นปะสีเรียบ (Inpainting เต็มรูปแบบไม่ได้อยู่ในขอบเขตนี้)
+- แอปพลิเคชันที่ตั้งค่า `FLAG_SECURE` จะไม่สามารถจับภาพหน้าจอได้ตามกลไกความปลอดภัยของระบบ Android
+- พฤติกรรมของ Overlay ระยะขอบ/Cutout และการอนุญาต `SYSTEM_ALERT_WINDOW` อาจแตกต่างกันไปตามเวอร์ชัน Android และรอมของผู้ผลิต
+- พฤติกรรมการตรวจสอบของ **Google Play Protect** ต้องทดสอบยืนยันบนอุปกรณ์จริงเท่านั้น การไม่ประกาศ Accessibility Service ใน Manual Edition ไม่ถือเป็นการรับประกันผลการตรวจสอบของ Google
+

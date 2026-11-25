@@ -55,7 +55,9 @@ import com.example.core.ui.SectionHeader
 import com.example.core.ui.StatusPill
 import com.example.domain.model.CaptureMode
 import com.example.domain.model.CaptureStatus
+import com.example.domain.model.OverlayRenderStatus
 import com.example.domain.model.ReadingDirection
+import com.example.domain.model.TranslationDisplayMode
 import com.example.domain.model.TranslationProviderType
 import com.example.ui.theme.CharcoalElevated
 import com.example.ui.theme.CharcoalVoid
@@ -84,7 +86,8 @@ fun TranslatorScreen(
     onSelectReadingDirection: (ReadingDirection) -> Unit,
     onEditSourceText: (String) -> Unit,
     onRetranslateEdited: (TranslationProviderType?) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onRequestOverlayPermission: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
@@ -145,6 +148,63 @@ fun TranslatorScreen(
                         text = if (state.isOcrRunning) "กำลังสกัดข้อความด้วย OCR..." else "กำลังแปลภาษาไทย...",
                         style = MaterialTheme.typography.bodySmall,
                         color = ElectricCyan
+                    )
+                }
+
+                val displayModeLabel = if (settings.translationDisplayMode == TranslationDisplayMode.REPLACE) {
+                    "Replace + ${settings.translationBackgroundTreatment.displayThai}"
+                } else {
+                    "Panel"
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    StatusPill(
+                        text = displayModeLabel,
+                        color = ElectricCyan,
+                        containerColor = ElectricCyanContainer,
+                        showDot = settings.translationDisplayMode == TranslationDisplayMode.REPLACE &&
+                            state.overlayRenderStatus == OverlayRenderStatus.ACTIVE_REPLACE
+                    )
+                    if (settings.translationDisplayMode == TranslationDisplayMode.REPLACE) {
+                        val regionSuffix = if (state.translatedRegions.isNotEmpty()) {
+                            " (${state.translatedRegions.size} ช่อง)"
+                        } else ""
+                        Text(
+                            text = "${state.overlayRenderStatus.displayThai}$regionSuffix",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextSecondary,
+                            modifier = Modifier.testTag("translator_replace_status")
+                        )
+                    }
+                }
+
+                if (settings.translationDisplayMode == TranslationDisplayMode.REPLACE &&
+                    !uiState.permissions.hasOverlayPermission
+                ) {
+                    EterCard(
+                        containerColor = StatusWarningContainer,
+                        borderColor = StatusWarning.copy(alpha = 0.5f)
+                    ) {
+                        Text(
+                            text = "ยังไม่ได้รับสิทธิ์หน้าต่างลอย (Overlay) — โหมด Replace จะแสดงคำแปลในแผงควบคุมจนกว่าจะอนุญาตสิทธิ์",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = StatusWarning
+                        )
+                        FilledTonalButton(
+                            onClick = onRequestOverlayPermission,
+                            modifier = Modifier.testTag("translator_grant_overlay_button")
+                        ) {
+                            Text("อนุญาต Overlay")
+                        }
+                    }
+                } else if (!state.overlayWarning.isNullOrBlank()) {
+                    Text(
+                        text = state.overlayWarning,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = StatusWarning
                     )
                 }
 

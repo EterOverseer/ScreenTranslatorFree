@@ -225,7 +225,8 @@ fun AppNavigation(
                             onSelectCaptureMode = { vm.setCaptureMode(it) },
                             onSelectReadingDirection = { vm.setReadingDirection(it) },
                             onEditSourceText = { vm.updateEditableSource(it) },
-                            onRetranslateEdited = { vm.translateEditedText(it) }
+                            onRetranslateEdited = { vm.translateEditedText(it) },
+                            onRequestOverlayPermission = onRequestOverlayPermission
                         )
                     }
 
@@ -263,7 +264,10 @@ fun AppNavigation(
                             onDownloadModel = { vm.downloadOfflineModel(it) },
                             onDeleteModel = { vm.deleteOfflineModel(it) },
                             onClearCache = { vm.clearTranslationCache() },
-                            onResetSettings = { vm.resetSettings() }
+                            onResetSettings = { vm.resetSettings() },
+                            onSetTranslationDisplayMode = { vm.setTranslationDisplayMode(it) },
+                            onSetTranslationBackgroundTreatment = { vm.setTranslationBackgroundTreatment(it) },
+                            onRequestOverlayPermission = onRequestOverlayPermission
                         )
                     }
 

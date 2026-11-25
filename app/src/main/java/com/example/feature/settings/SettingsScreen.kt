@@ -26,7 +26,9 @@ import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.Layers
 import androidx.compose.material.icons.rounded.RestartAlt
 import androidx.compose.material.icons.rounded.Security
+import androidx.compose.material.icons.rounded.Subtitles
 import androidx.compose.material.icons.rounded.Timer
+import androidx.compose.material.icons.rounded.WarningAmber
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -57,12 +59,16 @@ import com.example.domain.model.CaptureMode
 import com.example.domain.model.HybridPriority
 import com.example.domain.model.LanguageOption
 import com.example.domain.model.ReadingDirection
+import com.example.domain.model.TranslationBackgroundTreatment
+import com.example.domain.model.TranslationDisplayMode
 import com.example.domain.model.TranslationMode
 import com.example.ui.theme.CharcoalElevated
 import com.example.ui.theme.CharcoalVoid
 import com.example.ui.theme.StatusError
 import com.example.ui.theme.StatusErrorContainer
 import com.example.ui.theme.StatusSuccess
+import com.example.ui.theme.StatusWarning
+import com.example.ui.theme.StatusWarningContainer
 import com.example.ui.theme.TextSecondary
 import kotlin.math.roundToInt
 
@@ -88,7 +94,10 @@ fun SettingsScreen(
     onDeleteModel: (String) -> Unit,
     onClearCache: () -> Unit,
     onResetSettings: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onSetTranslationDisplayMode: (TranslationDisplayMode) -> Unit = {},
+    onSetTranslationBackgroundTreatment: (TranslationBackgroundTreatment) -> Unit = {},
+    onRequestOverlayPermission: () -> Unit = {}
 ) {
     val settings = uiState.settings
     var showResetDialog by remember { mutableStateOf(false) }
@@ -108,6 +117,93 @@ fun SettingsScreen(
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             Text("ตั้งค่าแอปพลิเคชัน", style = MaterialTheme.typography.headlineSmall)
+
+            // 0. Translation Display Mode & Background Treatment
+            EterCard {
+                SectionHeader(
+                    title = "การแสดงผลคำแปล (Translation Display)",
+                    icon = Icons.Rounded.Subtitles
+                )
+                Text("Display Mode", style = MaterialTheme.typography.labelLarge, color = TextSecondary)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TranslationDisplayMode.entries.forEach { mode ->
+                        val tag = if (mode == TranslationDisplayMode.REPLACE) {
+                            "display_mode_replace_chip"
+                        } else {
+                            "display_mode_panel_chip"
+                        }
+                        FilterChip(
+                            selected = settings.translationDisplayMode == mode,
+                            onClick = { onSetTranslationDisplayMode(mode) },
+                            label = { Text(mode.displayThai) },
+                            modifier = Modifier.testTag(tag)
+                        )
+                    }
+                }
+                Text(
+                    text = settings.translationDisplayMode.subtitleThai,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextSecondary
+                )
+
+                if (settings.translationDisplayMode == TranslationDisplayMode.REPLACE) {
+                    Text(
+                        text = "Background Treatment",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = TextSecondary,
+                        modifier = Modifier.testTag("background_treatment_section")
+                    )
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        TranslationBackgroundTreatment.entries.forEach { treatment ->
+                            FilterChip(
+                                selected = settings.translationBackgroundTreatment == treatment,
+                                onClick = { onSetTranslationBackgroundTreatment(treatment) },
+                                label = { Text(treatment.displayThai) },
+                                modifier = Modifier.testTag("background_treatment_bubble_chip")
+                            )
+                        }
+                    }
+                    Text(
+                        text = settings.translationBackgroundTreatment.subtitleThai,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextSecondary
+                    )
+
+                    if (!uiState.permissions.hasOverlayPermission) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(StatusWarningContainer, RoundedCornerShape(12.dp))
+                                .padding(12.dp)
+                                .testTag("settings_overlay_permission_warning"),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.WarningAmber,
+                                    contentDescription = null,
+                                    tint = StatusWarning,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Text(
+                                    text = "โหมด Replace ต้องใช้สิทธิ์ 'แสดงหน้าต่างทับแอปอื่น (Overlay)' เพื่อวางคำแปลทับตำแหน่งเดิม",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = StatusWarning
+                                )
+                            }
+                            FilledTonalButton(
+                                onClick = onRequestOverlayPermission,
+                                modifier = Modifier.testTag("settings_grant_overlay_button")
+                            ) {
+                                Text("เปิดตั้งค่าสิทธิ์ Overlay")
+                            }
+                        }
+                    }
+                }
+            }
 
             // 1. Languages & Reading Order
             EterCard {

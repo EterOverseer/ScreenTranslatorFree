@@ -62,6 +62,7 @@ import com.example.core.ui.EterCard
 import com.example.core.ui.SectionHeader
 import com.example.core.ui.StatusPill
 import com.example.domain.model.CaptureStatus
+import com.example.domain.model.TranslationDisplayMode
 import com.example.domain.model.TranslationMode
 import com.example.ui.theme.CharcoalElevated
 import com.example.ui.theme.CharcoalVoid
@@ -281,6 +282,14 @@ fun HomeScreen(
                         settings.captureMode.displayThai
                     } else {
                         "กดแปลเอง (Manual Edition — ไม่มี Auto-scroll)"
+                    }
+                )
+                SummaryRow(
+                    label = "รูปแบบแสดงคำแปล",
+                    value = if (settings.translationDisplayMode == TranslationDisplayMode.REPLACE) {
+                        "Replace + ${settings.translationBackgroundTreatment.displayThai} (วางทับตำแหน่งเดิม)"
+                    } else {
+                        "Panel (แผงควบคุมลอย)"
                     }
                 )
                 SummaryRow(

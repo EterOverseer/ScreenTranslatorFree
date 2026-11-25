@@ -6,6 +6,7 @@ import androidx.core.content.ContextCompat
 import com.example.capture.AutoCaptureScheduler
 import com.example.capture.ScreenCaptureManager
 import com.example.core.edition.EditionConfig
+import com.example.core.overlay.OverlayCaptureGuard
 import com.example.core.permissions.PermissionHelper
 import com.example.core.permissions.PermissionStatus
 import com.example.core.security.FirebaseConfigStatus
@@ -80,6 +81,23 @@ class AppContainer(private val appContext: Context) {
         ScreenCaptureManager(appContext, diagnosticsRepository)
     }
 
+    @Volatile
+    private var activeOverlayCaptureGuard: OverlayCaptureGuard = OverlayCaptureGuard.NO_OP
+
+    private val delegatingOverlayCaptureGuard = object : OverlayCaptureGuard {
+        override suspend fun suspendForCapture() {
+            activeOverlayCaptureGuard.suspendForCapture()
+        }
+
+        override suspend fun restoreAfterCapture() {
+            activeOverlayCaptureGuard.restoreAfterCapture()
+        }
+    }
+
+    fun registerOverlayCaptureGuard(guard: OverlayCaptureGuard?) {
+        activeOverlayCaptureGuard = guard ?: OverlayCaptureGuard.NO_OP
+    }
+
     val translateScreenUseCase: TranslateScreenUseCase by lazy {
         TranslateScreenUseCase(
             appContext = appContext,
@@ -88,20 +106,27 @@ class AppContainer(private val appContext: Context) {
             mangaContextProcessor = mangaContextProcessor,
             translationRouter = translationRouter,
             historyRepository = historyRepository,
-            diagnosticsRepository = diagnosticsRepository
+            diagnosticsRepository = diagnosticsRepository,
+            overlayCaptureGuard = delegatingOverlayCaptureGuard
         )
     }
 
     val autoCaptureScheduler: AutoCaptureScheduler by lazy {
-        AutoCaptureScheduler(scope = appScope) {
-            if (screenCaptureManager.isSessionActive.value) {
-                translateScreenUseCase.processCapturedBitmap(
-                    bitmapProvider = { screenCaptureManager.captureSingleFrame() },
-                    settings = latestSettings,
-                    forceProcess = false
-                )
+        AutoCaptureScheduler(
+            scope = appScope,
+            onScrollStarted = {
+                translateScreenUseCase.clearTranslatedRegions()
+            },
+            onTriggerCapture = {
+                if (screenCaptureManager.isSessionActive.value) {
+                    translateScreenUseCase.processCapturedBitmap(
+                        bitmapProvider = { screenCaptureManager.captureSingleFrame() },
+                        settings = latestSettings,
+                        forceProcess = false
+                    )
+                }
             }
-        }
+        )
     }
 
     private val _permissionStatus = MutableStateFlow(PermissionStatus())

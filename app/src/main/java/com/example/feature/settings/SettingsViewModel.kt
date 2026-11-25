@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.app.AppContainer
 import com.example.core.edition.EditionConfig
+import com.example.core.permissions.PermissionStatus
 import com.example.core.security.KeystoreEncryptionException
 import com.example.domain.model.AppSettings
 import com.example.domain.model.CaptureMode
@@ -12,6 +13,8 @@ import com.example.domain.model.HybridPriority
 import com.example.domain.model.LanguageOption
 import com.example.domain.model.OfflineModelInfo
 import com.example.domain.model.ReadingDirection
+import com.example.domain.model.TranslationBackgroundTreatment
+import com.example.domain.model.TranslationDisplayMode
 import com.example.domain.model.TranslationMode
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -23,6 +26,7 @@ import kotlinx.coroutines.launch
 data class SettingsUiState(
     val settings: AppSettings = AppSettings(),
     val offlineModels: List<OfflineModelInfo> = emptyList(),
+    val permissions: PermissionStatus = PermissionStatus(),
     val isAutoScrollSupported: Boolean = EditionConfig.isAutoScrollSupported,
     val cryptoErrorMessage: String? = null
 )
@@ -34,11 +38,13 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
     val uiState: StateFlow<SettingsUiState> = combine(
         container.settingsRepository.settingsFlow,
         container.offlineTranslationEngine.modelsFlow,
+        container.permissionStatus,
         cryptoErrorFlow
-    ) { settings, models, cryptoError ->
+    ) { settings, models, permissions, cryptoError ->
         SettingsUiState(
             settings = settings,
             offlineModels = models,
+            permissions = permissions,
             isAutoScrollSupported = container.isAutoScrollSupported,
             cryptoErrorMessage = cryptoError
         )
@@ -50,6 +56,12 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
 
     fun setSourceLanguage(language: LanguageOption) = update { it.copy(sourceLanguage = language) }
     fun setTargetLanguage(language: LanguageOption) = update { it.copy(targetLanguage = language) }
+    fun setTranslationDisplayMode(mode: TranslationDisplayMode) = update {
+        it.copy(translationDisplayMode = mode)
+    }
+    fun setTranslationBackgroundTreatment(treatment: TranslationBackgroundTreatment) = update {
+        it.copy(translationBackgroundTreatment = treatment)
+    }
     fun setTranslationMode(mode: TranslationMode) = update { it.copy(translationMode = mode) }
     fun setHybridPriority(priority: HybridPriority) = update { it.copy(hybridPriority = priority) }
     fun setCaptureMode(mode: CaptureMode) = update {

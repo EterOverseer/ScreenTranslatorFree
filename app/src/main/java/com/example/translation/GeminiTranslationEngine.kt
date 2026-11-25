@@ -3,6 +3,8 @@ package com.example.translation
 import android.util.Log
 import com.example.domain.model.LanguageOption
 import com.example.domain.model.ReadingDirection
+import com.example.domain.model.RegionTranslationRequest
+import com.example.domain.model.RegionTranslationResult
 import com.example.domain.model.TranslationFailureReason
 import com.example.domain.model.TranslationProviderType
 import com.example.domain.model.TranslationRequest
@@ -28,7 +30,8 @@ class GeminiTranslationEngine(
     private val firebaseReadyProvider: () -> Boolean = {
         runCatching { FirebaseApp.getApps(com.google.firebase.FirebaseApp.getInstance().applicationContext).isNotEmpty() }
             .getOrDefault(false)
-    }
+    },
+    private val rawBatchInvoker: (suspend (String) -> String?)? = null
 ) : TranslationEngine {
 
     override val providerType: TranslationProviderType = TranslationProviderType.GEMINI_AI
@@ -49,6 +52,30 @@ class GeminiTranslationEngine(
         optionalProperties = listOf("toneNote")
     )
 
+    private val batchResponseSchema = Schema.obj(
+        properties = mapOf(
+            "detectedLanguage" to Schema.string(
+                description = "ISO 639-1 language code of the source regions, e.g. ja, ko, en, mixed"
+            ),
+            "regions" to Schema.array(
+                items = Schema.obj(
+                    properties = mapOf(
+                        "id" to Schema.string(description = "Exact region ID from input"),
+                        "translatedText" to Schema.string(
+                            description = "Natural Thai translation for this exact region only"
+                        )
+                    )
+                ),
+                description = "Translated regions preserving exact input IDs without omitting or merging"
+            ),
+            "toneNote" to Schema.string(
+                description = "Brief optional note in Thai about character tone or terminology",
+                nullable = true
+            )
+        ),
+        optionalProperties = listOf("toneNote")
+    )
+
     private val model by lazy {
         Firebase.ai.generativeModel(
             modelName = MODEL_NAME,
@@ -56,6 +83,17 @@ class GeminiTranslationEngine(
                 responseMimeType = "application/json"
                 responseSchema = this@GeminiTranslationEngine.responseSchema
                 temperature = 0.25f
+            }
+        )
+    }
+
+    private val batchModel by lazy {
+        Firebase.ai.generativeModel(
+            modelName = MODEL_NAME,
+            generationConfig = generationConfig {
+                responseMimeType = "application/json"
+                responseSchema = this@GeminiTranslationEngine.batchResponseSchema
+                temperature = 0.2f
             }
         )
     }
@@ -133,6 +171,90 @@ class GeminiTranslationEngine(
             }
         }
 
+    override suspend fun translateRegions(request: RegionTranslationRequest): RegionTranslationResult =
+        withContext(Dispatchers.IO) {
+            if (request.regions.isEmpty()) {
+                return@withContext RegionTranslationResult.Failure(
+                    reason = TranslationFailureReason.EMPTY_INPUT,
+                    userMessageThai = "ไม่พบพื้นที่ข้อความสำหรับส่งให้ Gemini AI",
+                    technicalDetails = "Empty region list"
+                )
+            }
+
+            if (!firebaseReadyProvider()) {
+                diagnosticsRepository.recordError(
+                    "GeminiTranslationEngine",
+                    "FirebaseApp unavailable (missing google-services.json or App Check configuration)"
+                )
+                return@withContext RegionTranslationResult.Failure(
+                    reason = TranslationFailureReason.APP_CHECK_OR_SERVICE_UNAVAILABLE,
+                    userMessageThai = "ยังไม่ได้ตั้งค่า Firebase / App Check สำหรับ Gemini AI กรุณาตรวจสอบ google-services.json หรือใช้งานโหมดออฟไลน์",
+                    technicalDetails = "FirebaseApp not initialized"
+                )
+            }
+
+            val prompt = buildRegionBatchPrompt(request)
+            try {
+                val rawJson = withTimeout(60_000L) {
+                    if (rawBatchInvoker != null) {
+                        rawBatchInvoker.invoke(prompt)
+                    } else {
+                        batchModel.generateContent(prompt).text
+                    }
+                }?.trim()
+
+                if (rawJson.isNullOrEmpty()) {
+                    return@withContext RegionTranslationResult.Failure(
+                        reason = TranslationFailureReason.UNKNOWN,
+                        userMessageThai = "Gemini AI ไม่ได้ส่งคำตอบกลับมา",
+                        technicalDetails = "Empty batch response"
+                    )
+                }
+
+                when (val validation = RegionBatchValidator.parseAndValidateGeminiBatchJson(
+                    rawJson = rawJson,
+                    expectedInputs = request.regions,
+                    fallbackLanguage = request.sourceLanguage.code
+                )) {
+                    is RegionBatchValidationResult.Valid -> RegionTranslationResult.Success(
+                        translationsById = validation.translationsById,
+                        provider = TranslationProviderType.GEMINI_AI,
+                        detectedLanguage = validation.detectedLanguage ?: request.sourceLanguage.code,
+                        note = validation.note
+                    )
+                    is RegionBatchValidationResult.Invalid -> {
+                        diagnosticsRepository.recordError(
+                            "GeminiTranslationEngine",
+                            "Batch validation rejected: ${validation.technicalDetails}"
+                        )
+                        RegionTranslationResult.Failure(
+                            reason = validation.reason,
+                            userMessageThai = validation.userMessageThai,
+                            technicalDetails = validation.technicalDetails
+                        )
+                    }
+                }
+            } catch (e: TimeoutCancellationException) {
+                Log.e(TAG, "Gemini region batch translation timed out", e)
+                diagnosticsRepository.recordError("GeminiTranslationEngine", "Batch request timed out after 60s")
+                RegionTranslationResult.Failure(
+                    reason = TranslationFailureReason.TIMEOUT,
+                    userMessageThai = "การเชื่อมต่อ Gemini AI หมดเวลา (60 วินาที) กรุณาลองใหม่",
+                    technicalDetails = "TimeoutCancellationException"
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e(TAG, "Gemini region batch translation failed", e)
+                val singleFailure = mapExceptionToFailure(e)
+                RegionTranslationResult.Failure(
+                    reason = singleFailure.reason,
+                    userMessageThai = singleFailure.userMessageThai,
+                    technicalDetails = singleFailure.technicalDetails
+                )
+            }
+        }
+
     private fun buildMangaTranslationPrompt(
         request: TranslationRequest,
         sourceText: String
@@ -176,6 +298,62 @@ class GeminiTranslationEngine(
 
             OCR Text to Translate:
             $sourceText
+        """.trimIndent()
+    }
+
+    private fun buildRegionBatchPrompt(request: RegionTranslationRequest): String {
+        val styleHint = when (request.readingDirection) {
+            ReadingDirection.RTL_MANGA -> "Japanese Manga (Right-to-Left dialogue bubbles)"
+            ReadingDirection.LTR_MANHWA -> "Korean Manhwa / Webtoon or general app screen"
+            ReadingDirection.AUTO -> when (request.sourceLanguage) {
+                LanguageOption.JAPANESE -> "Japanese Manga"
+                LanguageOption.KOREAN -> "Korean Manhwa"
+                else -> "Manga/Manhwa or general mobile screen"
+            }
+        }
+        val contextSection = if (request.previousContext.isNotEmpty()) {
+            "Previous dialogue context for consistent character names & pronouns (do NOT include these as new regions):\n" +
+                request.previousContext.joinToString("\n") { "- $it" }
+        } else {
+            "No previous context."
+        }
+        val customNote = customNoteProvider().trim()
+        val customSection = if (customNote.isNotEmpty()) {
+            "\nUser glossary / tone preference: $customNote"
+        } else {
+            ""
+        }
+
+        val serializedRegions = org.json.JSONArray().apply {
+            request.regions.forEach { region ->
+                put(
+                    JSONObject().apply {
+                        put("id", region.id)
+                        put("isSfx", region.isSfx)
+                        put("isShortExpression", region.isShortExpression)
+                        put("text", region.text)
+                    }
+                )
+            }
+        }.toString(2)
+
+        return """
+            You are an expert Japanese/Korean Manga & Manhwa translator into natural, idiomatic Thai for in-bubble overlay replacement.
+            Content type: $styleHint
+            Source language hint: ${request.sourceLanguage.code}
+            Target language: Thai (th)
+
+            Strict Rules:
+            1. Translate EVERY input region independently into concise, natural Thai that fits inside its speech bubble.
+            2. Every output entry MUST preserve its exact input "id".
+            3. NEVER combine unrelated dialogue regions, NEVER split one region into another ID, NEVER invent speech, and NEVER omit any region.
+            4. For regions with "isSfx": true, output a concise Thai comic sound effect without explanatory fluff.
+            5. Keep character names and pronouns consistent with previous context.$customSection
+
+            $contextSection
+
+            Input Regions JSON (${request.regions.size} regions):
+            $serializedRegions
         """.trimIndent()
     }
 

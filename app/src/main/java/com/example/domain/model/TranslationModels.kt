@@ -139,6 +139,94 @@ sealed interface TranslationResult {
     ) : TranslationResult
 }
 
+enum class TranslationDisplayMode(
+    val displayThai: String,
+    val subtitleThai: String
+) {
+    PANEL(
+        displayThai = "Panel",
+        subtitleThai = "แสดงคำแปลในแผงควบคุมลอย"
+    ),
+    REPLACE(
+        displayThai = "Replace",
+        subtitleThai = "ปิดข้อความต้นฉบับและวางคำแปลทับตำแหน่งเดิม"
+    )
+}
+
+enum class TranslationBackgroundTreatment(
+    val displayThai: String,
+    val subtitleThai: String
+) {
+    BUBBLE(
+        displayThai = "Bubble",
+        subtitleThai = "วิเคราะห์สีพื้นหลังและสร้างแผ่นปิดข้อความแบบบอลลูน"
+    )
+}
+
+enum class OverlayRenderStatus(val displayThai: String) {
+    IDLE("รอแสดงผล"),
+    PANEL_ONLY("โหมด Panel"),
+    ACTIVE_REPLACE("กำลังวางคำแปลทับหน้าจอ"),
+    PARTIAL_FALLBACK("วางทับบางส่วน (ส่วนที่เหลือดูในแผงลอย)"),
+    PERMISSION_REQUIRED("ต้องอนุญาตสิทธิ์หน้าต่างลอย (Overlay)"),
+    SUSPENDED_FOR_CAPTURE("ซ่อนชั่วคราวระหว่างจับภาพ"),
+    PAUSED("พักการวางคำแปลทับหน้าจอ"),
+    FAILED("ไม่สามารถวางคำแปลทับหน้าจอ")
+}
+
+data class RegionTranslationInput(
+    val id: String,
+    val text: String,
+    val isSfx: Boolean = false,
+    val isShortExpression: Boolean = false
+)
+
+data class RegionTranslationRequest(
+    val regions: List<RegionTranslationInput>,
+    val sourceLanguage: LanguageOption,
+    val targetLanguage: LanguageOption = LanguageOption.THAI,
+    val readingDirection: ReadingDirection = ReadingDirection.AUTO,
+    val previousContext: List<String> = emptyList(),
+    val forceProvider: TranslationProviderType? = null
+)
+
+data class RegionTranslationItem(
+    val id: String,
+    val translatedText: String
+)
+
+sealed interface RegionTranslationResult {
+    data class Success(
+        val translationsById: Map<String, String>,
+        val provider: TranslationProviderType,
+        val detectedLanguage: String,
+        val fromCache: Boolean = false,
+        val note: String? = null
+    ) : RegionTranslationResult
+
+    data class Failure(
+        val reason: TranslationFailureReason,
+        val userMessageThai: String,
+        val technicalDetails: String
+    ) : RegionTranslationResult
+}
+
+data class TranslatedRegion(
+    val id: String,
+    val sourceText: String,
+    val translatedText: String,
+    val box: OcrBoundingBox,
+    val isSfx: Boolean,
+    val isShortExpression: Boolean,
+    val detectedLanguage: String,
+    val estimatedBackgroundArgb: Int,
+    val estimatedTextArgb: Int,
+    val backgroundConfidence: Float,
+    val readingOrderIndex: Int,
+    val imageWidth: Int,
+    val imageHeight: Int
+)
+
 data class OfflineModelInfo(
     val languageCode: String,
     val thaiName: String,

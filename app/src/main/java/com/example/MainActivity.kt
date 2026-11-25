@@ -90,12 +90,13 @@ class MainActivity : ComponentActivity() {
                         ) {
                             notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                         }
-                        if (container.latestSettings.overlayEnabled &&
+                        if ((container.latestSettings.overlayEnabled ||
+                                container.latestSettings.translationDisplayMode == com.example.domain.model.TranslationDisplayMode.REPLACE) &&
                             !PermissionHelper.hasOverlayPermission(this)
                         ) {
                             uiScope.launch {
                                 snackbarHostState.showSnackbar(
-                                    "กรุณาอนุญาตสิทธิ์แสดงหน้าต่างทับแอปอื่นก่อนเริ่มโหมดปุ่มลอย"
+                                    "กรุณาอนุญาตสิทธิ์แสดงหน้าต่างทับแอปอื่น (Overlay) ก่อนเริ่มแปลทับหน้าจอ"
                                 )
                             }
                             startActivity(PermissionHelper.createOverlaySettingsIntent(this))
