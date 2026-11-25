@@ -14,7 +14,7 @@ on:
       publish_release:
         description: "Publish Manual & Full Debug APKs to GitHub Releases"
         required: true
-        default: false
+        default: true
         type: boolean
 
 permissions:
@@ -152,7 +152,7 @@ jobs:
           retention-days: 30
 
       - name: Publish Manual & Full Debug APKs to GitHub Releases
-        if: ${{ github.event_name != 'pull_request' && (startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish_release)) }}
+        if: ${{ github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish_release)) }}
         uses: softprops/action-gh-release@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
